@@ -49,7 +49,7 @@
     if (state.queue.length < 2) state.queue.push(d);
   }
 
-  // One movement step. Returns 'ate', 'moved', or 'dead'.
+  // One movement step. Returns 'ate', 'moved', or 'dead' (game finished: crash, or field full with state.won).
   function stepSnake(state) {
     if (!state.alive) return 'dead';
     if (state.queue.length) state.dir = state.queue.shift();
@@ -76,6 +76,7 @@
       if (!state.food) {
         state.won = true;
         state.alive = false;
+        return 'dead';
       }
       return 'ate';
     }
@@ -89,56 +90,57 @@
   }
 
   // ---------- Browser interface ----------
-  function mount(container, ctx) {
-    const CELL = 28;
+  function mount(container) {
+    const CELL = 30;
+    const HUD = 34;
     const wrap = U.el('div', { class: 'arcade-stage' });
     container.appendChild(wrap);
-    const view = AR.createCanvas(wrap, COLS * CELL, ROWS * CELL, 'snake');
+    const view = AR.createCanvas(wrap, COLS * CELL, ROWS * CELL + HUD, 'snake');
     const g = view.ctx;
-    const hiKey = 'snake';
-    let hi = U.store.get(hiKey, 0);
+    let hi = U.store.get('hi.snake', 0);
     let state = newGame(1);
     let started = false;
     let acc = 0;
-    let loop = null;
-    let unbind = null;
 
     function draw() {
-      g.fillStyle = '#17321f';
-      g.fillRect(0, 0, view.canvas.width, view.canvas.height);
+      g.fillStyle = '#0f0d2b';
+      g.fillRect(0, 0, view.w, view.h);
       for (let y = 0; y < ROWS; y++) {
         for (let x = 0; x < COLS; x++) {
           g.fillStyle = (x + y) % 2 ? '#1d3d27' : '#214730';
-          g.fillRect(x * CELL, y * CELL, CELL, CELL);
+          g.fillRect(x * CELL, HUD + y * CELL, CELL, CELL);
         }
       }
-      if (state.food) AR.emoji(g, '🐟', state.food.x * CELL + CELL / 2, state.food.y * CELL + CELL / 2, CELL - 4);
-      state.snake.forEach(function (p, i) {
+      if (state.food) AR.emoji(g, '🐟', state.food.x * CELL + CELL / 2, HUD + state.food.y * CELL + CELL / 2 + 1, CELL - 6);
+      for (let i = state.snake.length - 1; i >= 0; i--) {
+        const p = state.snake[i];
         const cx = p.x * CELL + CELL / 2;
-        const cy = p.y * CELL + CELL / 2;
+        const cy = HUD + p.y * CELL + CELL / 2;
         if (i === 0) {
-          AR.emoji(g, '🦝', cx, cy, CELL + 2);
+          AR.emoji(g, state.alive || state.won ? '🦝' : '😵', cx, cy + 1, CELL);
         } else {
-          g.fillStyle = i % 2 ? '#84cc16' : '#65a30d';
+          // The tail has the grey and black rings of a raccoon tail.
+          g.fillStyle = i % 2 ? '#9ca3af' : '#374151';
           g.beginPath();
           g.arc(cx, cy, CELL / 2 - 2, 0, Math.PI * 2);
           g.fill();
         }
-      });
-      AR.text(g, 'Punti: ' + state.score + '   Migliore: ' + Math.max(hi, state.score), 10, 12, 14, '#fef3c7', 'left');
+      }
+      AR.text(g, 'Punti ' + state.score, 10, HUD / 2, 15, '#fef3c7', 'left');
+      AR.text(g, 'Pesci ' + state.eaten, view.w / 2, HUD / 2, 15, '#fef3c7');
+      AR.text(g, 'Record ' + Math.max(hi, state.score), view.w - 10, HUD / 2, 15, '#fef3c7', 'right');
     }
 
-    function update(dt) {
+    function frame(dt) {
       if (!started || !state.alive) return;
       acc += dt;
-      const every = stepTime(state);
-      while (acc >= every && state.alive) {
-        acc -= every;
+      while (acc >= stepTime(state) && state.alive) {
+        acc -= stepTime(state);
         const r = stepSnake(state);
         if (A && r === 'ate') A.sfx.eat();
         if (r === 'dead') {
-          if (A) A.sfx.hit();
-          return endRun();
+          if (A) state.won ? A.sfx.win() : A.sfx.hit();
+          endRun();
         }
       }
     }
@@ -147,11 +149,11 @@
       started = false;
       if (state.score > hi) {
         hi = state.score;
-        U.store.set(hiKey, hi);
+        U.store.set('hi.snake', hi);
       }
       AR.overlay(wrap,
-        state.won ? 'Hai vinto! 🦝🏆' : 'Oh no! 🦝',
-        'Punti: ' + state.score + ' · Pesci: ' + state.eaten + ' · Migliore: ' + hi,
+        state.won ? 'Hai riempito tutto il campo! 🦝🏆' : 'Ahi! 🦝',
+        'Punti: ' + state.score + ' · Pesci: ' + state.eaten + ' · Record: ' + hi,
         'Gioca ancora', newRun);
     }
 
@@ -159,28 +161,28 @@
       state = newGame(Math.floor(Math.random() * 1e9));
       started = true;
       acc = 0;
-      loop = loop || AR.startLoop(update, draw);
     }
 
-    function onKey(k, down) {
-      if (!down) return;
-      const map = { arrowup: 'up', w: 'up', arrowdown: 'down', s: 'down', arrowleft: 'left', a: 'left', arrowright: 'right', d: 'right' };
-      if (map[k] && started) turn(state, map[k]);
-    }
-
-    unbind = AR.bindKeys(onKey);
-    draw();
-    AR.overlay(wrap, 'Snake Procione 🦝', 'Frecce o WASD per girare. Mangia i pesci. Non sbattere contro il muro o contro te stesso.', 'Inizia', newRun);
+    const KEY_DIR = { arrowup: 'up', w: 'up', arrowdown: 'down', s: 'down', arrowleft: 'left', a: 'left', arrowright: 'right', d: 'right' };
+    const unbind = AR.bindKeys(function (k, down) {
+      if (down && KEY_DIR[k] && started) turn(state, KEY_DIR[k]);
+    });
+    const loop = AR.startLoop(frame, draw);
+    AR.overlay(wrap, 'Snake Procione 🦝', 'Usa le frecce per girare. Mangia i pesci: la coda si allunga. Non toccare il bordo e non toccare la coda.', 'Inizia', newRun);
     return {
       destroy: function () {
-        if (loop) loop.stop();
-        if (unbind) unbind();
+        loop.stop();
+        unbind();
+      },
+      debug: {
+        get state() { return state; },
+        get started() { return started; },
       },
     };
   }
 
   return {
-    meta: { id: 'snake', title: 'Snake', icon: '🐍', desc: 'Il procione mangia pesci. Più pesci, più veloce.' },
+    meta: { id: 'snake', title: 'Snake', icon: '🐍', desc: 'Il procione mangia i pesci e la coda si allunga.' },
     mount: mount,
     newGame: newGame,
     stepSnake: stepSnake,

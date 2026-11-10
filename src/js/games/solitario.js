@@ -1,4 +1,6 @@
-// Solitario (Klondike with the 40-card Piacentino deck). Draw 1, unlimited stock recycling.
+// Solitario (Klondike with the 40-card Piacentino deck). Draw one card, stock can be recycled.
+// Columns go down by one and alternate colour group: Coppe/Denari against Spade/Bastoni.
+// Final piles go up by suit from the Asso to the Re. Only a Re can go on an empty column.
 (function (name, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -9,22 +11,20 @@
   const D = isNode ? require('./deck.js') : window.RA.modules.deck;
   const A = isNode ? null : window.RA.audio;
 
-  // Suits 0 and 1 are "red". Suits 2 and 3 are "black". Only used for alternating colour rule.
-  const colorOf = (c) => (c.suit < 2 ? 'r' : 'b');
+  // Coppe and Denari are the "warm" group. Spade and Bastoni are the "cool" group.
+  const groupOf = function (c) { return c.suit < 2 ? 0 : 1; };
 
   function newGame(rnd) {
     const deck = U.shuffle(D.makeDeck(), rnd);
     const tableau = [];
     for (let col = 0; col < 7; col++) {
       const pile = [];
-      for (let i = 0; i <= col; i++) {
-        pile.push({ card: deck.pop(), up: i === col });
-      }
+      for (let i = 0; i <= col; i++) pile.push({ card: deck.pop(), up: i === col });
       tableau.push(pile);
     }
     return {
       tableau: tableau,
-      stock: deck.map((c) => ({ card: c, up: false })),
+      stock: deck.map(function (c) { return { card: c, up: false }; }),
       waste: [],
       foundation: [[], [], [], []],
       moves: 0,
@@ -33,65 +33,64 @@
 
   function canToTableau(card, top) {
     if (!top) return card.rank === 10;
-    return top.up && colorOf(top.card) !== colorOf(card) && top.card.rank === card.rank + 1;
+    return top.up && groupOf(top.card) !== groupOf(card) && top.card.rank === card.rank + 1;
   }
 
   function canToFoundation(card, suit, state) {
-    if (card.suit !== suit) return false;
-    return state.foundation[suit].length + 1 === card.rank;
+    return card.suit === suit && state.foundation[suit].length + 1 === card.rank;
   }
 
-  // Returns the cards that would move from a source. null when source is invalid.
+  // Cards that move from a source: [{card, up}]. null when the source is not valid.
+  // src: { type: 'waste' } | { type: 'found', suit } | { type: 'tab', col, idx }
   function sourceCards(state, src) {
     if (src.type === 'waste') {
       return state.waste.length ? [state.waste[state.waste.length - 1]] : null;
     }
     if (src.type === 'found') {
       const p = state.foundation[src.suit];
-      return p.length ? [{ card: p[p.length - 1], up: true }] : null;
+      return p && p.length ? [{ card: p[p.length - 1], up: true }] : null;
     }
     if (src.type === 'tab') {
       const col = state.tableau[src.col];
       if (!col || src.idx < 0 || src.idx >= col.length || !col[src.idx].up) return null;
-      // A run must be descending by one and alternate colour.
-      for (let i = src.idx; i < col.length - 1; i++) {
-        const a = col[i].card;
-        const b = col[i + 1].card;
-        if (!col[i + 1].up || b.rank !== a.rank - 1 || colorOf(a) === colorOf(b)) return null;
-      }
       return col.slice(src.idx);
     }
     return null;
   }
 
-  // Try to move src to dst. Returns { ok, reason }.
-  function move(state, src, dst) {
+  function checkMove(state, src, dst) {
     const cards = sourceCards(state, src);
-    if (!cards) return { ok: false, reason: 'no card' };
+    if (!cards) return 'no card';
     const first = cards[0].card;
     if (dst.type === 'found') {
-      if (cards.length !== 1) return { ok: false, reason: 'one card only' };
-      if (!canToFoundation(first, dst.suit, state)) return { ok: false, reason: 'not allowed' };
-    } else if (dst.type === 'tab') {
-      const target = state.tableau[dst.col];
-      if (!target) return { ok: false, reason: 'bad column' };
-      if (src.type === 'tab' && src.col === dst.col) return { ok: false, reason: 'same column' };
-      const top = target.length ? target[target.length - 1] : null;
-      if (!canToTableau(first, top)) return { ok: false, reason: 'not allowed' };
-    } else {
-      return { ok: false, reason: 'bad target' };
+      if (src.type === 'found') return 'not allowed';
+      if (cards.length !== 1) return 'one card only';
+      if (!canToFoundation(first, dst.suit, state)) return 'not allowed';
+      return null;
     }
+    if (dst.type === 'tab') {
+      const target = state.tableau[dst.col];
+      if (!target) return 'bad column';
+      if (src.type === 'tab' && src.col === dst.col) return 'same column';
+      if (!canToTableau(first, target.length ? target[target.length - 1] : null)) return 'not allowed';
+      return null;
+    }
+    return 'bad target';
+  }
 
-    // Remove from source.
+  // Moves src to dst when the rules allow it. Returns { ok, reason }.
+  function move(state, src, dst) {
+    const reason = checkMove(state, src, dst);
+    if (reason) return { ok: false, reason: reason };
+    const cards = sourceCards(state, src);
     if (src.type === 'waste') state.waste.pop();
     else if (src.type === 'found') state.foundation[src.suit].pop();
     else state.tableau[src.col].splice(src.idx);
 
-    // Place on destination.
-    if (dst.type === 'found') state.foundation[dst.suit].push(first);
+    if (dst.type === 'found') state.foundation[dst.suit].push(cards[0].card);
     else state.tableau[dst.col] = state.tableau[dst.col].concat(cards);
 
-    // Flip the card left behind.
+    // Turn over the card that was under the moved cards.
     if (src.type === 'tab') {
       const col = state.tableau[src.col];
       if (col.length && !col[col.length - 1].up) col[col.length - 1].up = true;
@@ -100,13 +99,14 @@
     return { ok: true };
   }
 
+  // Takes one card from the stock, or turns the waste pile over when the stock is empty.
   function drawStock(state) {
     if (state.stock.length) {
       const c = state.stock.pop();
       c.up = true;
       state.waste.push(c);
     } else if (state.waste.length) {
-      state.stock = state.waste.reverse().map((c) => ({ card: c.card, up: false }));
+      state.stock = state.waste.reverse().map(function (c) { return { card: c.card, up: false }; });
       state.waste = [];
     } else {
       return { ok: false };
@@ -116,163 +116,316 @@
   }
 
   function isWon(state) {
-    return state.foundation.every((p) => p.length === 10);
+    return state.foundation.every(function (p) { return p.length === 10; });
   }
 
-  // Finds any legal move to a foundation. Used by double click and by hint.
+  // Every place a source can go. Empty columns count once, because they are all the same.
+  function destinations(state, src) {
+    const cards = sourceCards(state, src);
+    if (!cards) return [];
+    const out = [];
+    const first = cards[0].card;
+    if (!checkMove(state, src, { type: 'found', suit: first.suit })) out.push({ type: 'found', suit: first.suit });
+    let emptyUsed = false;
+    for (let col = 0; col < 7; col++) {
+      const dst = { type: 'tab', col: col };
+      if (checkMove(state, src, dst)) continue;
+      if (!state.tableau[col].length) {
+        // Moving a Re from the bottom of one column to another empty column does nothing.
+        if (emptyUsed || (src.type === 'tab' && src.idx === 0)) continue;
+        emptyUsed = true;
+      }
+      out.push(dst);
+    }
+    return out;
+  }
+
   function findFoundationMove(state) {
     const sources = [{ type: 'waste' }];
-    state.tableau.forEach((col, i) => {
+    state.tableau.forEach(function (col, i) {
       if (col.length) sources.push({ type: 'tab', col: i, idx: col.length - 1 });
     });
     for (const s of sources) {
       const cards = sourceCards(state, s);
-      if (!cards || cards.length !== 1) continue;
+      if (!cards) continue;
       const c = cards[0].card;
-      if (canToFoundation(c, c.suit, state)) return { src: s, dst: { type: 'found', suit: c.suit } };
+      if (!checkMove(state, s, { type: 'found', suit: c.suit })) return { src: s, dst: { type: 'found', suit: c.suit } };
     }
     return null;
   }
 
+  // A useful next move, or null. { src, dst } or { draw: true }.
+  function findHint(state) {
+    const f = findFoundationMove(state);
+    if (f) return f;
+    // Column moves that turn a card over or free a column for a waiting Re.
+    for (let col = 0; col < 7; col++) {
+      const pile = state.tableau[col];
+      const idx = pile.findIndex(function (s) { return s.up; });
+      if (idx < 0) continue;
+      const src = { type: 'tab', col: col, idx: idx };
+      const dst = destinations(state, src).filter(function (d) { return d.type === 'tab'; })[0];
+      if (dst && (idx > 0 || state.tableau[dst.col].length)) return { src: src, dst: dst };
+    }
+    if (state.waste.length) {
+      const dst = destinations(state, { type: 'waste' })[0];
+      if (dst) return { src: { type: 'waste' }, dst: dst };
+    }
+    if (state.stock.length || state.waste.length) return { draw: true };
+    return null;
+  }
+
+  // True when only final-pile moves are left: no hidden cards and nothing in stock or waste.
+  function canAutoFinish(state) {
+    return !state.stock.length && !state.waste.length &&
+      state.tableau.every(function (col) { return col.every(function (s) { return s.up; }); });
+  }
+
   // ---------- Browser interface ----------
-  function mount(container, ctx) {
-    let rnd = U.makeRng();
+  function mount(container) {
+    const rnd = U.makeRng();
     let state = newGame(rnd);
-    let sel = null; // selected source
+    let history = [];
+    let sel = null; // { src, dests }
+    let hint = null;
+    let note = '';
+    let won = false;
     let alive = true;
+    const timers = [];
     const root = U.el('div', { class: 'solitario game-panel' });
     container.appendChild(root);
 
+    function snapshot() {
+      history.push(JSON.stringify(state));
+      if (history.length > 300) history.shift();
+    }
+
     function newGameNow() {
       state = newGame(rnd);
+      history = [];
       sel = null;
+      hint = null;
+      won = false;
+      note = '';
       render();
     }
 
-    function attempt(src, dst) {
+    function undo() {
+      if (!history.length || won) return;
+      state = JSON.parse(history.pop());
+      sel = null;
+      hint = null;
+      note = 'Mossa annullata.';
+      render();
+    }
+
+    function doMove(src, dst) {
+      snapshot();
       const r = move(state, src, dst);
       if (!r.ok) {
-        if (A) A.sfx.bad();
-        sel = null;
-        render();
+        history.pop();
         return false;
       }
-      if (A) A.sfx.place();
       sel = null;
+      hint = null;
+      note = '';
+      if (A) dst.type === 'found' ? A.sfx.ok() : A.sfx.place();
       if (isWon(state)) {
+        won = true;
         if (A) A.sfx.win();
-        render();
-        root.appendChild(U.el('div', { class: 'overlay' }, U.el('div', { class: 'card-box' },
-          U.el('h2', { text: 'Hai vinto! 🦝🎉' }),
-          U.el('p', { text: 'Tutte le carte sono nelle pile finali in ' + state.moves + ' mosse.' }),
-          U.el('button', { class: 'btn big', text: 'Nuova partita', onclick: newGameNow }))));
-        return true;
       }
       render();
       return true;
     }
 
-    function tapCard(src) {
-      if (!sel) {
-        sel = src;
-        if (A) A.sfx.click();
-        return render();
-      }
-      if (sel.type === src.type && sel.col === src.col && sel.idx === src.idx && sel.suit === src.suit) {
+    function sameSrc(a, b) {
+      return a.type === b.type && a.col === b.col && a.idx === b.idx && a.suit === b.suit;
+    }
+
+    // Click on a card: one destination moves at once, several let the player choose.
+    function clickSource(src) {
+      if (won) return;
+      if (sel && sameSrc(sel.src, src)) {
         sel = null;
         return render();
       }
-      // Tap a card in a column to use it as target column.
-      attempt(sel, { type: 'tab', col: src.col });
+      const dests = destinations(state, src);
+      if (!dests.length) {
+        sel = null;
+        note = 'Questa carta non si può spostare adesso.';
+        if (A) A.sfx.bad();
+        return render();
+      }
+      if (dests.length === 1) return doMove(src, dests[0]);
+      sel = { src: src, dests: dests };
+      note = 'Scegli dove mettere la carta: tocca una delle destinazioni illuminate.';
+      if (A) A.sfx.click();
+      render();
     }
 
-    function tapTarget(dst) {
-      if (!sel) return;
-      attempt(sel, dst);
+    function clickDest(dst) {
+      if (!sel) return false;
+      const ok = sel.dests.some(function (d) { return d.type === dst.type && d.col === dst.col && d.suit === dst.suit; });
+      if (!ok) return false;
+      doMove(sel.src, dst);
+      return true;
     }
 
-    function cardsOf(pile) { return pile; }
+    function draw() {
+      if (won) return;
+      snapshot();
+      if (!drawStock(state).ok) history.pop();
+      else if (A) A.sfx.click();
+      sel = null;
+      hint = null;
+      note = '';
+      render();
+    }
+
+    function showHint() {
+      if (won) return;
+      const h = findHint(state);
+      sel = null;
+      hint = h;
+      if (!h) note = 'Non vedo altre mosse. Puoi annullare o iniziare una nuova partita.';
+      else if (h.draw) note = 'Prova a pescare una carta dal mazzo.';
+      else note = 'Prova a spostare la carta illuminata.';
+      render();
+    }
+
+    function autoFinish() {
+      const stepOnce = function () {
+        if (!alive || won) return;
+        const f = findFoundationMove(state);
+        if (!f) return;
+        doMove(f.src, f.dst);
+        timers.push(setTimeout(stepOnce, 90));
+      };
+      stepOnce();
+    }
+
+    function isDest(dst) {
+      return !!sel && sel.dests.some(function (d) { return d.type === dst.type && d.col === dst.col && d.suit === dst.suit; });
+    }
 
     function render() {
       if (!alive) return;
       root.innerHTML = '';
-      const top = U.el('div', { class: 'sol-top' });
+      const top = U.el('div', { class: 'sol-row' });
       const stock = state.stock.length
-        ? D.cardEl(null, { hidden: true, onclick: function () { sel = null; drawStock(state); render(); } })
-        : U.el('div', { class: 'pcard empty', onclick: function () { sel = null; drawStock(state); render(); }, text: '↺' });
+        ? D.cardEl(null, { hidden: true, onclick: draw })
+        : U.el('div', { class: 'pcard empty', onclick: draw, title: 'Rigira il mazzo' }, state.waste.length ? U.el('span', { class: 'recycle', text: '↺' }) : null);
+      if (hint && hint.draw) stock.classList.add('hinted');
+      stock.setAttribute('data-role', 'stock');
+      top.appendChild(stock);
+
       const wasteTop = state.waste.length ? state.waste[state.waste.length - 1].card : null;
       const waste = wasteTop
-        ? D.cardEl(wasteTop, { selected: sel && sel.type === 'waste', onclick: function () { return tapCard({ type: 'waste' }); } })
+        ? D.cardEl(wasteTop, { selected: !!sel && sel.src.type === 'waste', onclick: function () { clickSource({ type: 'waste' }); } })
         : U.el('div', { class: 'pcard empty' });
-      top.append(stock, waste, U.el('div', { class: 'spacer' }));
-      state.foundation.forEach((pile, suit) => {
+      if (hint && hint.src && hint.src.type === 'waste') waste.classList.add('hinted');
+      waste.setAttribute('data-role', 'waste');
+      top.appendChild(waste);
+      top.appendChild(U.el('div', { class: 'sol-gap' }));
+
+      state.foundation.forEach(function (pile, suit) {
+        const dst = { type: 'found', suit: suit };
         const topCard = pile.length ? pile[pile.length - 1] : null;
-        const node = topCard ? D.cardEl(topCard, { selected: sel && sel.type === 'found' && sel.suit === suit, onclick: function () {
-          if (sel) return tapTarget({ type: 'found', suit: suit });
-          return tapCard({ type: 'found', suit: suit });
-        } }) : U.el('div', { class: 'pcard empty found', onclick: function () { tapTarget({ type: 'found', suit: suit }); }, text: D.SUITS[suit].icon });
+        const onclick = function () {
+          if (clickDest(dst)) return;
+          if (topCard) clickSource({ type: 'found', suit: suit });
+        };
+        let node;
+        if (topCard) {
+          node = D.cardEl(topCard, { selected: !!sel && sel.src.type === 'found' && sel.src.suit === suit, onclick: onclick });
+        } else {
+          node = U.el('div', { class: 'pcard empty found', onclick: onclick });
+          node.innerHTML = D.suitSvg(suit, 'found-suit');
+        }
+        if (isDest(dst)) node.classList.add('dest');
+        node.setAttribute('data-role', 'found-' + suit);
         top.appendChild(node);
       });
       root.appendChild(top);
 
-      const board = U.el('div', { class: 'tableau' });
-      state.tableau.forEach((col, ci) => {
-        const colEl = U.el('div', { class: 'col', onclick: function (e) {
-          if (e.target === colEl && sel) tapTarget({ type: 'tab', col: ci });
-        } });
-        colEl.style.height = (col.length * 22 + 150) + 'px';
-        if (!col.length) {
-          colEl.appendChild(U.el('div', { class: 'pcard empty', onclick: function () { if (sel) tapTarget({ type: 'tab', col: ci }); } }));
-        }
-        col.forEach((slot, idx) => {
-          const isSel = sel && sel.type === 'tab' && sel.col === ci && idx >= sel.idx;
+      const board = U.el('div', { class: 'sol-row tableau' });
+      let tallest = 0;
+      state.tableau.forEach(function (col, ci) {
+        const dst = { type: 'tab', col: ci };
+        const colEl = U.el('div', { class: 'col' + (isDest(dst) ? ' dest' : ''), 'data-col': ci, onclick: function () { clickDest(dst); } });
+        if (!col.length) colEl.appendChild(U.el('div', { class: 'pcard empty' }));
+        let y = 0;
+        col.forEach(function (slot, idx) {
+          const src = { type: 'tab', col: ci, idx: idx };
+          const selected = !!sel && sel.src.type === 'tab' && sel.src.col === ci && idx >= sel.src.idx;
           const node = slot.up
-            ? D.cardEl(slot.card, { selected: isSel, onclick: function () {
-              if (sel) return tapTarget({ type: 'tab', col: ci });
-              return tapCard({ type: 'tab', col: ci, idx: idx });
-            } })
-            : D.cardEl(null, { hidden: true, small: false });
+            ? D.cardEl(slot.card, {
+              selected: selected,
+              onclick: function (e) {
+                e.stopPropagation();
+                if (clickDest(dst)) return;
+                clickSource(src);
+              },
+            })
+            : D.cardEl(null, { hidden: true });
           node.classList.add('stacked');
-          node.style.top = (idx * 22) + 'px';
-          if (slot.up) {
-            node.addEventListener('dblclick', function () {
-              const f = findFoundationMove(state);
-              if (!f) return;
-              const srcCards = sourceCards(state, { type: 'tab', col: ci, idx: idx });
-              if (srcCards && idx === col.length - 1) attempt({ type: 'tab', col: ci, idx: idx }, { type: 'found', suit: slot.card.suit });
-            });
-          }
+          node.style.top = y + 'px';
+          if (hint && hint.src && hint.src.type === 'tab' && hint.src.col === ci && hint.src.idx === idx) node.classList.add('hinted');
           colEl.appendChild(node);
+          y += slot.up ? 30 : 12;
         });
+        tallest = Math.max(tallest, y);
         board.appendChild(colEl);
       });
+      board.style.height = (tallest + 110) + 'px';
       root.appendChild(board);
 
-      const msg = U.el('div', { class: 'msg', text: sel ? 'Ora tocca dove spostare la carta.' : 'Tocca una carta, poi tocca la colonna di destinazione. Doppio tocco: va alla pila finale.' });
-      root.appendChild(msg);
-      root.appendChild(U.el('div', { class: 'actions' },
-        U.el('button', { class: 'btn', text: 'Suggerimento', onclick: function () {
-          const f = findFoundationMove(state);
-          msg.textContent = f ? 'Puoi mettere una carta nella pila finale.' : 'Nessuna mossa diretta verso le pile finali.';
-        } }),
-        U.el('button', { class: 'btn ghost', text: 'Nuova partita', onclick: newGameNow }),
-        U.el('span', { class: 'hint', text: 'Mosse: ' + state.moves + ' · Carte in pila: ' + state.foundation.reduce((s, p) => s + p.length, 0) + '/40' })));
+      const done = state.foundation.reduce(function (s, p) { return s + p.length; }, 0);
+      root.appendChild(U.el('div', { class: 'msg', text: note || 'Tocca una carta per spostarla. Tocca il mazzo per pescare.' }));
+      const actions = U.el('div', { class: 'actions' },
+        U.el('button', { class: 'btn', text: 'Suggerimento 💡', onclick: showHint }),
+        U.el('button', { class: 'btn', text: 'Annulla ↩', onclick: undo }),
+        U.el('button', { class: 'btn ghost', text: 'Nuova partita', onclick: newGameNow }));
+      if (!won && canAutoFinish(state)) {
+        actions.insertBefore(U.el('button', { class: 'btn', text: 'Completa da solo ✨', onclick: autoFinish }), actions.firstChild);
+      }
+      root.appendChild(actions);
+      root.appendChild(U.el('div', { class: 'hint', text: 'Mosse: ' + state.moves + ' · Carte nelle pile finali: ' + done + ' su 40' }));
+
+      if (won) {
+        root.appendChild(U.el('div', { class: 'overlay' }, U.el('div', { class: 'card-box' },
+          U.el('h2', { text: 'Hai vinto! 🦝🎉' }),
+          U.el('p', { text: 'Tutte le carte sono nelle pile finali. Mosse: ' + state.moves + '.' }),
+          U.el('button', { class: 'btn big', text: 'Nuova partita', onclick: newGameNow }))));
+      }
     }
 
     render();
     return {
-      destroy: function () { alive = false; },
+      destroy: function () {
+        alive = false;
+        timers.forEach(clearTimeout);
+      },
+      debug: {
+        get state() { return state; },
+        set state(s) { state = s; history = []; sel = null; won = isWon(s); render(); },
+        get won() { return won; },
+        findHint: function () { return findHint(state); },
+      },
     };
   }
 
   return {
-    meta: { id: 'solitario', title: 'Solitario', icon: '🂠', desc: 'Solitario classico con il mazzo dei procioni.' },
+    meta: { id: 'solitario', title: 'Solitario', icon: '🎴', desc: 'Il solitario classico con le carte Piacentine dei procioni.' },
     mount: mount,
     newGame: newGame,
     move: move,
     drawStock: drawStock,
     isWon: isWon,
-    canToTableau: canToTableau,
+    destinations: destinations,
+    findHint: findHint,
     findFoundationMove: findFoundationMove,
+    canAutoFinish: canAutoFinish,
+    canToTableau: canToTableau,
   };
 });

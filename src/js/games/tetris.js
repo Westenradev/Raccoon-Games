@@ -209,91 +209,88 @@
   }
 
   // ---------- Browser interface ----------
-  function mount(container, ctx) {
+  function mount(container) {
     const CELL = 30;
-    const SIDE = 150;
-    const canvasWrap = U.el('div', { class: 'arcade-stage' });
-    container.appendChild(canvasWrap);
-    const { canvas, ctx: g } = AR.createCanvas(canvasWrap, W * CELL + SIDE, H * CELL, 'tetris');
-    const hiKey = 'tetris';
-    let hi = U.store.get(hiKey, 0);
-    let state = null;
+    const SIDE = 160;
+    const wrap = U.el('div', { class: 'arcade-stage' });
+    container.appendChild(wrap);
+    const view = AR.createCanvas(wrap, W * CELL + SIDE, H * CELL, 'tetris');
+    const g = view.ctx;
+    let hi = U.store.get('hi.tetris', 0);
+    let state = newGame(1);
     let started = false;
     let paused = false;
-    let loop = null;
-    let unbind = null;
-    let dasLeft = 0;
-    let dasRight = 0;
-    let dasDown = 0;
-    const cleanup = [];
+    // Time until a held key repeats, per direction.
+    const hold = { left: 0, right: 0, down: 0 };
+
+    function drawBlock(x, y, type) {
+      g.fillStyle = BASE[type].color;
+      g.fillRect(x * CELL + 1, y * CELL + 1, CELL - 2, CELL - 2);
+      g.fillStyle = 'rgba(255,255,255,0.25)';
+      g.fillRect(x * CELL + 1, y * CELL + 1, CELL - 2, 4);
+      AR.emoji(g, BASE[type].emoji, x * CELL + CELL / 2, y * CELL + CELL / 2 + 2, 19);
+    }
 
     function draw() {
       g.fillStyle = '#1b1035';
-      g.fillRect(0, 0, canvas.width, canvas.height);
-      // Board grid.
+      g.fillRect(0, 0, view.w, view.h);
       for (let y = 0; y < H; y++) {
         for (let x = 0; x < W; x++) {
           g.fillStyle = (x + y) % 2 ? '#241547' : '#20123f';
           g.fillRect(x * CELL, y * CELL, CELL, CELL);
-          const v = state.board[y][x];
-          if (v !== null) drawBlock(x, y, v, 1);
+          if (state.board[y][x] !== null) drawBlock(x, y, state.board[y][x]);
         }
       }
       if (state.cur && !state.over) {
-        const gy = ghostY(state);
-        cells(state.cur.type, state.cur.rot, state.cur.x, gy).forEach(function (p) {
-          if (p.y >= 0) {
-            g.strokeStyle = 'rgba(255,255,255,0.35)';
-            g.strokeRect(p.x * CELL + 3, p.y * CELL + 3, CELL - 6, CELL - 6);
-          }
+        const c = state.cur;
+        g.strokeStyle = 'rgba(255,255,255,0.4)';
+        g.lineWidth = 2;
+        cells(c.type, c.rot, c.x, ghostY(state)).forEach(function (p) {
+          if (p.y >= 0) g.strokeRect(p.x * CELL + 3, p.y * CELL + 3, CELL - 6, CELL - 6);
         });
-        cells(state.cur.type, state.cur.rot, state.cur.x, state.cur.y).forEach(function (p) {
-          if (p.y >= 0) drawBlock(p.x, p.y, state.cur.type, 1);
+        cells(c.type, c.rot, c.x, c.y).forEach(function (p) {
+          if (p.y >= 0) drawBlock(p.x, p.y, c.type);
         });
       }
       // Side panel.
-      const sx = W * CELL + 12;
-      AR.text(g, 'NEXT', sx + 50, 24, 16, '#fde68a');
-      const nb = BASE[state.next];
-      ROT[state.next][0].forEach(function (row, r) {
+      const sx = W * CELL;
+      const mid = sx + SIDE / 2;
+      g.fillStyle = '#120a26';
+      g.fillRect(sx, 0, SIDE, view.h);
+      AR.text(g, 'PROSSIMO', mid, 26, 14, '#fde68a');
+      const shape = ROT[state.next][0];
+      const size = shape.length;
+      shape.forEach(function (row, r) {
         row.forEach(function (v, c) {
-          if (v) AR.emoji(g, nb.emoji, sx + 40 + c * 22 + 11, 60 + r * 22 + 11, 20);
+          if (!v) return;
+          const bx = mid - (size * 24) / 2 + c * 24;
+          const by = 48 + r * 24;
+          g.fillStyle = BASE[state.next].color;
+          g.fillRect(bx + 1, by + 1, 22, 22);
+          AR.emoji(g, BASE[state.next].emoji, bx + 12, by + 13, 15);
         });
       });
-      AR.text(g, 'PUNTI', sx + 50, 170, 16, '#fde68a');
-      AR.text(g, String(state.score), sx + 50, 196, 22, '#fff');
-      AR.text(g, 'MIGLIORE', sx + 50, 236, 14, '#fde68a');
-      AR.text(g, String(Math.max(hi, state.score)), sx + 50, 258, 18, '#fff');
-      AR.text(g, 'LIVELLO', sx + 50, 298, 14, '#fde68a');
-      AR.text(g, String(state.level), sx + 50, 320, 20, '#fff');
-      AR.text(g, 'RIGHE', sx + 50, 350, 14, '#fde68a');
-      AR.text(g, String(state.lines), sx + 50, 372, 20, '#fff');
+      const rows = [['PUNTI', state.score], ['RECORD', Math.max(hi, state.score)], ['LIVELLO', state.level], ['RIGHE', state.lines]];
+      rows.forEach(function (row, i) {
+        AR.text(g, row[0], mid, 180 + i * 62, 13, '#fde68a');
+        AR.text(g, String(row[1]), mid, 204 + i * 62, 22, '#fff');
+      });
+      ['← → muovi', '↑ ruota', '↓ giù veloce', 'Spazio: caduta', 'P: pausa'].forEach(function (line, i) {
+        AR.text(g, line, mid, 452 + i * 22, 12, '#b9afd9');
+      });
       if (paused) {
-        g.fillStyle = 'rgba(0,0,0,0.6)';
-        g.fillRect(0, 0, canvas.width, canvas.height);
-        AR.text(g, 'PAUSA', canvas.width / 2, canvas.height / 2, 40, '#fff');
+        g.fillStyle = 'rgba(0,0,0,0.65)';
+        g.fillRect(0, 0, view.w, view.h);
+        AR.text(g, 'PAUSA', view.w / 2, view.h / 2 - 14, 40, '#fff');
+        AR.text(g, 'Premi P per continuare', view.w / 2, view.h / 2 + 26, 16, '#fde68a');
       }
     }
 
-    function drawBlock(x, y, type, alpha) {
-      g.globalAlpha = alpha;
-      g.fillStyle = BASE[type].color;
-      g.fillRect(x * CELL + 1, y * CELL + 1, CELL - 2, CELL - 2);
-      g.globalAlpha = 1;
-      AR.emoji(g, BASE[type].emoji, x * CELL + CELL / 2, y * CELL + CELL / 2 + 1, 20);
-    }
-
-    function action(a) {
-      if (!started || state.over || paused) return;
-      if (a === 'left') move(state, -1);
-      if (a === 'right') move(state, 1);
-      if (a === 'rotate') { if (rotate(state) && A) A.sfx.click(); }
-      if (a === 'down') softDrop(state);
-      if (a === 'drop') {
-        hardDrop(state);
-        if (A) A.sfx.place();
+    function afterAction() {
+      if (state.cleared) {
+        if (A) A.sfx.clear();
+        state.cleared = 0;
       }
-      if (state.cleared && A) { A.sfx.clear(); state.cleared = 0; }
       if (state.over) gameOver();
     }
 
@@ -301,59 +298,71 @@
       started = false;
       if (state.score > hi) {
         hi = state.score;
-        U.store.set(hiKey, hi);
+        U.store.set('hi.tetris', hi);
       }
       if (A) A.sfx.lose();
-      AR.overlay(canvasWrap, 'Game over 🦝', 'Punti: ' + state.score + ' · Righe: ' + state.lines + ' · Migliore: ' + hi, 'Gioca ancora', newRun);
+      AR.overlay(wrap, 'Partita finita 🦝', 'Punti: ' + state.score + ' · Righe: ' + state.lines + ' · Record: ' + hi, 'Gioca ancora', newRun);
     }
 
     function newRun() {
       state = newGame(Math.floor(Math.random() * 1e9));
       started = true;
       paused = false;
-      dasLeft = dasRight = dasDown = 0;
-      loop = loop || AR.startLoop(update, draw);
+      hold.left = hold.right = hold.down = 0;
     }
 
-    function update(dt) {
+    function frame(dt) {
       if (!started || paused || state.over) return;
-      // Held keys auto-repeat.
       const inp = AR.dirInput();
-      const repeatEvery = 0.09;
-      if (inp.left) { dasLeft -= dt; if (dasLeft <= 0) { move(state, -1); dasLeft = repeatEvery; } } else dasLeft = 0;
-      if (inp.right) { dasRight -= dt; if (dasRight <= 0) { move(state, 1); dasRight = repeatEvery; } } else dasRight = 0;
-      if (inp.down) { dasDown -= dt; if (dasDown <= 0) { softDrop(state); dasDown = 0.05; } } else dasDown = 0;
+      ['left', 'right', 'down'].forEach(function (d) {
+        if (!inp[d]) {
+          hold[d] = 0;
+          return;
+        }
+        hold[d] -= dt;
+        if (hold[d] > 0) return;
+        if (d === 'left') move(state, -1);
+        else if (d === 'right') move(state, 1);
+        else softDrop(state);
+        hold[d] += d === 'down' ? 0.05 : 0.09;
+      });
       tick(state, dt);
-      if (state.over) gameOver();
+      afterAction();
     }
 
-    function onKey(k, isDownNow) {
-      if (!isDownNow) return;
-      if (k === 'p') { paused = !paused; return; }
-      if (k === 'arrowup' || k === 'w' || k === 'x') action('rotate');
-      if (k === ' ') action('drop');
-      // First press moves once now. Held keys repeat in update() after a short delay.
-      if (k === 'arrowleft') { action('left'); dasLeft = 0.2; }
-      if (k === 'arrowright') { action('right'); dasRight = 0.2; }
-      if (k === 'arrowdown') { action('down'); dasDown = 0.2; }
-    }
-
-    unbind = AR.bindKeys(onKey);
-    state = newGame(1);
-    draw();
-    AR.overlay(canvasWrap, 'Tetris Procioni 🦝', 'Frecce: muovi e ruota con ↑. Spazio: caduta. P: pausa.', 'Inizia', newRun);
+    const unbind = AR.bindKeys(function (k, down) {
+      if (!down || !started || state.over) return;
+      if (k === 'p') {
+        paused = !paused;
+        return;
+      }
+      if (paused) return;
+      // The first press acts at once. A held key repeats after a short wait (see frame).
+      if (k === 'arrowleft' || k === 'a') { move(state, -1); hold.left = 0.2; }
+      else if (k === 'arrowright' || k === 'd') { move(state, 1); hold.right = 0.2; }
+      else if (k === 'arrowdown' || k === 's') { softDrop(state); hold.down = 0.2; }
+      else if (k === 'arrowup' || k === 'w' || k === 'x') { if (rotate(state) && A) A.sfx.click(); }
+      else if (k === ' ') { hardDrop(state); if (A) A.sfx.place(); }
+      afterAction();
+    });
+    const loop = AR.startLoop(frame, draw);
+    AR.overlay(wrap, 'Tetris dei Procioni 🦝', 'Frecce ← → per muovere, ↑ per ruotare, ↓ per scendere. Spazio fa cadere il pezzo. P mette in pausa.', 'Inizia', newRun);
 
     return {
       destroy: function () {
-        if (loop) loop.stop();
-        if (unbind) unbind();
-        cleanup.forEach(function (f) { f(); });
+        loop.stop();
+        unbind();
+      },
+      debug: {
+        get state() { return state; },
+        get started() { return started; },
+        get paused() { return paused; },
       },
     };
   }
 
   return {
-    meta: { id: 'tetris', title: 'Tetris', icon: '🧱', desc: 'Incastra i blocchi con i simboli degli animali.' },
+    meta: { id: 'tetris', title: 'Tetris', icon: '🧱', desc: 'Incastra i pezzi e completa le righe.' },
     mount: mount,
     newGame: newGame,
     move: move,

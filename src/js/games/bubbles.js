@@ -1,5 +1,6 @@
-// Bubble Buster (Bolle Procioni). Shoot animal bubbles. Three or more of the same kind pop.
-// Bubbles that lose their link to the ceiling fall. Every 6 shots the ceiling comes down one row.
+// Bolle Procioni (bubble shooter). Three or more bubbles of the same kind pop.
+// Bubbles that lose their link to the ceiling fall. Every few shots a new row comes down.
+// Clear every bubble to reach the next level.
 (function (name, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -12,73 +13,88 @@
 
   const R = 18; // bubble radius
   const WIDTH = 360;
+  const HEIGHT = 610;
+  const TOP = 36; // height of the score bar
   const ROW_H = 31;
-  const SHOOT_Y = 490;
-  const SPEED = 720;
-  const KINDS = ['🦝', '🐭', '🐱', '🐕', '🐟'];
-  const COLORS = ['#f59e0b', '#94a3b8', '#fb7185', '#60a5fa', '#34d399'];
+  const SHOOT_X = WIDTH / 2;
+  const SHOOT_Y = 548;
+  const DANGER_Y = 470; // a bubble centre at or under this line ends the game
+  const SPEED = 760;
   const SHOTS_PER_ROW = 6;
-  const DANGER_Y = 420;
+  const MAX_ANGLE = 1.35;
+  const KINDS = ['🦝', '🐭', '🐱', '🐕', '🐟', '🧀'];
+  const COLORS = ['#f59e0b', '#94a3b8', '#fb7185', '#60a5fa', '#34d399', '#fde047'];
 
-  // Row ids are absolute. Even ids have 10 bubbles, odd ids have 9. Parity gives the offset.
-  const isEven = (rid) => ((rid % 2) + 2) % 2 === 0;
-  const colsIn = (rid) => (isEven(rid) ? 10 : 9);
-  const validCell = (rid, c) => c >= 0 && c < colsIn(rid);
+  // Row ids are absolute. Even rows hold 10 bubbles, odd rows hold 9 and are shifted.
+  const isEven = function (rid) { return ((rid % 2) + 2) % 2 === 0; };
+  const colsIn = function (rid) { return isEven(rid) ? 10 : 9; };
+  const key = function (rid, c) { return rid + ',' + c; };
+  const unkey = function (k) { return k.split(',').map(Number); };
 
   function posOf(rid, c, base) {
-    return { x: (isEven(rid) ? 18 : 36) + c * 36, y: 18 + (rid - base) * ROW_H };
+    return { x: (isEven(rid) ? R : 2 * R) + c * 2 * R, y: TOP + R + (rid - base) * ROW_H };
   }
 
-  function neighbours(rid, c) {
+  // Cells that touch (rid, c), inside the field and not above the ceiling row.
+  function neighbours(rid, c, base) {
     const out = [[rid, c - 1], [rid, c + 1]];
-    if (isEven(rid)) {
-      out.push([rid - 1, c - 1], [rid - 1, c], [rid + 1, c - 1], [rid + 1, c]);
-    } else {
-      out.push([rid - 1, c], [rid - 1, c + 1], [rid + 1, c], [rid + 1, c + 1]);
-    }
-    return out.filter((p) => validCell(p[0], p[1]));
+    if (isEven(rid)) out.push([rid - 1, c - 1], [rid - 1, c], [rid + 1, c - 1], [rid + 1, c]);
+    else out.push([rid - 1, c], [rid - 1, c + 1], [rid + 1, c], [rid + 1, c + 1]);
+    return out.filter(function (p) { return p[0] >= base && p[1] >= 0 && p[1] < colsIn(p[0]); });
   }
 
-  function key(rid, c) {
-    return rid + ',' + c;
+  function kindsFor(level) {
+    return Math.min(KINDS.length, 3 + level);
   }
 
-  // Start field: n rows of random kinds.
-  function newGame(seed) {
+  function newGame(seed, level, score) {
     const rnd = U.makeRng(seed);
+    const lv = level || 1;
+    const kinds = kindsFor(lv);
     const grid = new Map();
-    const base = 0;
-    for (let r = 0; r < 6; r++) {
-      const rid = base + r;
-      for (let c = 0; c < colsIn(rid); c++) grid.set(key(rid, c), Math.floor(rnd() * KINDS.length));
+    const rows = Math.min(8, 4 + lv);
+    for (let rid = 0; rid < rows; rid++) {
+      for (let c = 0; c < colsIn(rid); c++) grid.set(key(rid, c), Math.floor(rnd() * kinds));
     }
     const state = {
       rnd: rnd,
+      level: lv,
+      kinds: kinds,
       grid: grid,
-      base: base,
+      base: 0, // row id of the ceiling row
       angle: 0,
       moving: null,
-      cur: Math.floor(rnd() * KINDS.length),
-      next: Math.floor(rnd() * KINDS.length),
+      cur: 0,
+      next: 0,
       shots: 0,
-      score: 0,
+      rowsLeft: 4 + lv * 2,
+      score: score || 0,
       over: false,
       won: false,
       events: [],
+      gone: [], // bubbles removed by the last shot, for the animation
     };
+    state.cur = pickKind(state);
+    state.next = pickKind(state);
     return state;
   }
 
-  // Remove groups of 3+ same-kind bubbles touching cell (rid, c). Returns count removed.
+  // A random kind that is still on the board, so that every shot can be useful.
+  function pickKind(state) {
+    const present = [];
+    state.grid.forEach(function (kind) { if (present.indexOf(kind) < 0) present.push(kind); });
+    if (!present.length) return Math.floor(state.rnd() * state.kinds);
+    return present[Math.floor(state.rnd() * present.length)];
+  }
+
+  // Removes the group of same-kind bubbles around (rid, c) when it has 3 or more.
   function popGroup(state, rid, c) {
     const kind = state.grid.get(key(rid, c));
     const seen = new Set([key(rid, c)]);
     const stack = [[rid, c]];
-    const group = [];
     while (stack.length) {
-      const [r, cc] = stack.pop();
-      group.push([r, cc]);
-      neighbours(r, cc).forEach(function (n) {
+      const cell = stack.pop();
+      neighbours(cell[0], cell[1], state.base).forEach(function (n) {
         const k = key(n[0], n[1]);
         if (!seen.has(k) && state.grid.get(k) === kind) {
           seen.add(k);
@@ -86,25 +102,30 @@
         }
       });
     }
-    if (group.length < 3) return 0;
-    group.forEach(function (p) { state.grid.delete(key(p[0], p[1])); });
-    return group.length;
+    if (seen.size < 3) return 0;
+    seen.forEach(function (k) {
+      const cell = unkey(k);
+      const p = posOf(cell[0], cell[1], state.base);
+      state.gone.push({ x: p.x, y: p.y, kind: kind, fall: false });
+      state.grid.delete(k);
+    });
+    return seen.size;
   }
 
-  // Drops bubbles that are not connected to the ceiling row (base). Returns count dropped.
+  // Removes the bubbles that are not linked to the ceiling row. Returns how many.
   function dropFloating(state) {
     const seen = new Set();
     const stack = [];
     state.grid.forEach(function (v, k) {
-      const rid = Number(k.split(',')[0]);
-      if (rid === state.base) {
+      const cell = unkey(k);
+      if (cell[0] === state.base) {
         seen.add(k);
-        stack.push(k.split(',').map(Number));
+        stack.push(cell);
       }
     });
     while (stack.length) {
-      const [r, c] = stack.pop();
-      neighbours(r, c).forEach(function (n) {
+      const cell = stack.pop();
+      neighbours(cell[0], cell[1], state.base).forEach(function (n) {
         const k = key(n[0], n[1]);
         if (!seen.has(k) && state.grid.has(k)) {
           seen.add(k);
@@ -112,24 +133,23 @@
         }
       });
     }
-    let dropped = 0;
-    const toDelete = [];
-    state.grid.forEach(function (v, k) {
-      if (!seen.has(k)) toDelete.push(k);
-    });
-    toDelete.forEach(function (k) {
+    const loose = [];
+    state.grid.forEach(function (v, k) { if (!seen.has(k)) loose.push(k); });
+    loose.forEach(function (k) {
+      const cell = unkey(k);
+      const p = posOf(cell[0], cell[1], state.base);
+      state.gone.push({ x: p.x, y: p.y, kind: state.grid.get(k), fall: true });
       state.grid.delete(k);
-      dropped += 1;
     });
-    return dropped;
+    return loose.length;
   }
 
-  // Places the moving bubble. Finds the empty cell nearest to its position next to the contact.
+  // Puts the flying bubble in the free cell nearest to (x, y).
   function settle(state, x, y, kind) {
     let best = null;
     let bestD = Infinity;
     const consider = function (rid, c) {
-      if (!validCell(rid, c) || state.grid.has(key(rid, c))) return;
+      if (state.grid.has(key(rid, c))) return;
       const p = posOf(rid, c, state.base);
       const d = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y);
       if (d < bestD) {
@@ -137,163 +157,208 @@
         best = [rid, c];
       }
     };
-    // Candidate cells: the top row, or empty neighbours of any bubble.
-    const top = state.base;
-    for (let c = 0; c < colsIn(top); c++) consider(top, c);
+    for (let c = 0; c < colsIn(state.base); c++) consider(state.base, c);
     state.grid.forEach(function (v, k) {
-      const [r, c] = k.split(',').map(Number);
-      neighbours(r, c).forEach(function (n) { consider(n[0], n[1]); });
+      const cell = unkey(k);
+      neighbours(cell[0], cell[1], state.base).forEach(function (n) { consider(n[0], n[1]); });
     });
-    if (!best) {
-      // Fallback: place in a new row above. Should not happen in normal play.
-      best = [state.base, 0];
-    }
+    if (!best) return { popped: 0, dropped: 0 };
     state.grid.set(key(best[0], best[1]), kind);
     const popped = popGroup(state, best[0], best[1]);
-    let dropped = 0;
-    if (popped) {
-      dropped = dropFloating(state);
-      state.score += popped * 10 + dropped * 20;
-      state.events.push('pop');
-    } else {
-      state.events.push('land');
-    }
+    const dropped = popped ? dropFloating(state) : 0;
+    if (popped) state.score += popped * 10 + dropped * 20;
     return { popped: popped, dropped: dropped };
+  }
+
+  function touchesBubble(state, x, y) {
+    const limit = (2 * R - 3) * (2 * R - 3);
+    for (const k of state.grid.keys()) {
+      const cell = unkey(k);
+      const p = posOf(cell[0], cell[1], state.base);
+      if ((p.x - x) * (p.x - x) + (p.y - y) * (p.y - y) < limit) return true;
+    }
+    return false;
+  }
+
+  function lowestY(state) {
+    let low = 0;
+    state.grid.forEach(function (v, k) {
+      const cell = unkey(k);
+      low = Math.max(low, posOf(cell[0], cell[1], state.base).y);
+    });
+    return low;
   }
 
   function fire(state) {
     if (state.over || state.moving) return false;
-    const a = state.angle;
-    state.moving = { x: WIDTH / 2, y: SHOOT_Y, vx: Math.sin(a) * SPEED, vy: -Math.cos(a) * SPEED, kind: state.cur };
+    state.moving = { x: SHOOT_X, y: SHOOT_Y, vx: Math.sin(state.angle) * SPEED, vy: -Math.cos(state.angle) * SPEED, kind: state.cur };
     state.cur = state.next;
-    state.next = Math.floor(state.rnd() * KINDS.length);
+    state.next = pickKind(state);
     state.events.push('shoot');
     return true;
   }
 
-  // Advances the moving bubble and handles impacts. Also keeps the ceiling descending.
+  // The flying bubble landed: place it, add a new row when due, then check win and loss.
+  function land(state, m) {
+    state.moving = null;
+    const res = settle(state, m.x, m.y, m.kind);
+    state.events.push(res.popped ? 'pop' : 'land');
+    state.shots += 1;
+    if (state.grid.size === 0) {
+      state.won = true;
+      state.over = true;
+      return;
+    }
+    if (state.rowsLeft > 0 && state.shots % SHOTS_PER_ROW === 0) {
+      state.base -= 1;
+      state.rowsLeft -= 1;
+      for (let c = 0; c < colsIn(state.base); c++) state.grid.set(key(state.base, c), Math.floor(state.rnd() * state.kinds));
+      state.events.push('row');
+    }
+    if (lowestY(state) >= DANGER_Y) {
+      state.over = true;
+      return;
+    }
+    // The waiting bubbles must be kinds that are still on the board.
+    const present = new Set(state.grid.values());
+    if (!present.has(state.cur)) state.cur = pickKind(state);
+    if (!present.has(state.next)) state.next = pickKind(state);
+  }
+
+  // Advances the flying bubble by dt seconds.
   function update(state, dt) {
-    if (state.over) return;
     state.events = [];
-    if (state.moving) {
-      const steps = 4;
-      for (let s = 0; s < steps && state.moving; s++) {
-        const m = state.moving;
-        m.x += (m.vx * dt) / steps;
-        m.y += (m.vy * dt) / steps;
-        if (m.x < R) { m.x = R; m.vx = -m.vx; }
-        if (m.x > WIDTH - R) { m.x = WIDTH - R; m.vx = -m.vx; }
-        let hit = m.y - R <= 0;
-        if (!hit) {
-          for (const v of state.grid.keys()) {
-            const [r, c] = v.split(',').map(Number);
-            const p = posOf(r, c, state.base);
-            const dx = p.x - m.x;
-            const dy = p.y - m.y;
-            if (dx * dx + dy * dy < (2 * R - 4) * (2 * R - 4)) {
-              hit = true;
-              break;
-            }
-          }
-        }
-        if (hit) {
-          state.moving = null;
-          settle(state, m.x, m.y, m.kind);
-          state.shots += 1;
-          if (state.shots % SHOTS_PER_ROW === 0) {
-            state.base -= 1;
-            const rid = state.base;
-            for (let c = 0; c < colsIn(rid); c++) {
-              state.grid.set(key(rid, c), Math.floor(state.rnd() * KINDS.length));
-            }
-          }
-          if (state.grid.size === 0) {
-            state.won = true;
-            state.over = true;
-          }
-          const lowest = Math.max.apply(null, [0].concat(Array.from(state.grid.keys()).map(function (k) {
-            const [r, c] = k.split(',').map(Number);
-            return posOf(r, c, state.base).y;
-          })));
-          if (lowest >= DANGER_Y) {
-            state.over = true;
-          }
-          if (state.events.indexOf('pop') < 0) state.events.push('land');
-          return;
-        }
+    if (state.over || !state.moving) return;
+    state.gone = [];
+    const steps = 6;
+    for (let s = 0; s < steps; s++) {
+      const m = state.moving;
+      m.x += (m.vx * dt) / steps;
+      m.y += (m.vy * dt) / steps;
+      if (m.x < R) {
+        m.x = R;
+        m.vx = Math.abs(m.vx);
+      } else if (m.x > WIDTH - R) {
+        m.x = WIDTH - R;
+        m.vx = -Math.abs(m.vx);
+      }
+      if (m.y - R <= TOP || touchesBubble(state, m.x, m.y)) {
+        land(state, m);
+        return;
       }
     }
   }
 
+  // Points of the aim line, with wall bounces, until the first contact.
+  function aimPath(state, maxLen) {
+    const pts = [];
+    let x = SHOOT_X;
+    let y = SHOOT_Y;
+    let vx = Math.sin(state.angle);
+    const vy = -Math.cos(state.angle);
+    for (let d = 0; d < maxLen; d += 4) {
+      x += vx * 4;
+      y += vy * 4;
+      if (x < R) { x = R; vx = Math.abs(vx); }
+      if (x > WIDTH - R) { x = WIDTH - R; vx = -Math.abs(vx); }
+      if (y - R <= TOP || touchesBubble(state, x, y)) break;
+      if (d % 20 === 0) pts.push({ x: x, y: y });
+    }
+    return pts;
+  }
+
   // ---------- Browser interface ----------
-  function mount(container, ctx) {
+  function mount(container) {
     const wrap = U.el('div', { class: 'arcade-stage' });
     container.appendChild(wrap);
-    const view = AR.createCanvas(wrap, WIDTH, 540, 'bubbles');
+    const view = AR.createCanvas(wrap, WIDTH, HEIGHT, 'bubbles');
     const g = view.ctx;
-    const hiKey = 'bubbles';
-    let hi = U.store.get(hiKey, 0);
-    let state = newGame(1);
+    let hi = U.store.get('hi.bubbles', 0);
+    let state = newGame(1, 1, 0);
     let started = false;
+    let particles = [];
     let loop = null;
-    let unbind = null;
 
-    function drawBubble(x, y, kind) {
+    function drawBubble(x, y, kind, alpha) {
+      g.globalAlpha = alpha == null ? 1 : alpha;
       g.beginPath();
       g.arc(x, y, R - 1, 0, Math.PI * 2);
       g.fillStyle = COLORS[kind];
       g.fill();
-      g.strokeStyle = 'rgba(255,255,255,0.6)';
       g.lineWidth = 2;
+      g.strokeStyle = 'rgba(255,255,255,0.65)';
       g.stroke();
-      AR.emoji(g, KINDS[kind], x, y + 1, R * 1.5);
+      AR.emoji(g, KINDS[kind], x, y + 1, R * 1.25);
+      g.globalAlpha = 1;
     }
 
     function draw() {
       g.fillStyle = '#1e1b4b';
-      g.fillRect(0, 0, WIDTH, 540);
+      g.fillRect(0, 0, WIDTH, HEIGHT);
+      g.fillStyle = '#17153a';
+      g.fillRect(0, DANGER_Y + R, WIDTH, HEIGHT - DANGER_Y - R);
+      // Danger line.
+      g.strokeStyle = 'rgba(248,113,113,0.8)';
+      g.lineWidth = 2;
+      g.setLineDash([8, 6]);
+      g.beginPath();
+      g.moveTo(0, DANGER_Y + R);
+      g.lineTo(WIDTH, DANGER_Y + R);
+      g.stroke();
+      g.setLineDash([]);
+
       state.grid.forEach(function (kind, k) {
-        const [r, c] = k.split(',').map(Number);
-        const p = posOf(r, c, state.base);
+        const cell = unkey(k);
+        const p = posOf(cell[0], cell[1], state.base);
         drawBubble(p.x, p.y, kind);
       });
-      // Danger line.
-      g.strokeStyle = 'rgba(248,113,113,0.7)';
-      g.setLineDash([6, 6]);
-      g.beginPath();
-      g.moveTo(0, DANGER_Y + 14);
-      g.lineTo(WIDTH, DANGER_Y + 14);
-      g.stroke();
-      g.setLineDash([]);
-      // Aim line.
-      g.strokeStyle = 'rgba(253,230,138,0.6)';
-      g.setLineDash([4, 6]);
-      g.beginPath();
-      g.moveTo(WIDTH / 2, SHOOT_Y);
-      g.lineTo(WIDTH / 2 + Math.sin(state.angle) * 220, SHOOT_Y - Math.cos(state.angle) * 220);
-      g.stroke();
-      g.setLineDash([]);
+      particles.forEach(function (p) { drawBubble(p.x, p.y, p.kind, Math.max(0, p.life)); });
+
+      if (started && !state.moving && !state.over) {
+        g.fillStyle = 'rgba(253,230,138,0.85)';
+        aimPath(state, 520).forEach(function (p) {
+          g.beginPath();
+          g.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
+          g.fill();
+        });
+      }
       if (state.moving) drawBubble(state.moving.x, state.moving.y, state.moving.kind);
-      // Shooter.
-      drawBubble(WIDTH / 2, SHOOT_Y, state.cur);
-      AR.emoji(g, '🦝', WIDTH / 2, SHOOT_Y + 40, 26);
-      drawBubble(WIDTH - 36, SHOOT_Y + 40, state.next);
-      AR.text(g, 'Punti ' + state.score, 8, 14, 14, '#fef3c7', 'left');
-      AR.text(g, 'Migliore ' + Math.max(hi, state.score), WIDTH - 8, 14, 14, '#fef3c7', 'right');
-      AR.text(g, 'Colpi ' + state.shots + '  (nuova fila ogni ' + SHOTS_PER_ROW + ')', WIDTH / 2, 530, 11, '#94a3b8');
+      else drawBubble(SHOOT_X, SHOOT_Y, state.cur);
+      AR.emoji(g, '🦝', SHOOT_X - 48, SHOOT_Y + 8, 34);
+      AR.text(g, 'Prossima', WIDTH - 44, SHOOT_Y - 26, 11, '#c7d2fe');
+      drawBubble(WIDTH - 44, SHOOT_Y, state.next);
+      AR.text(g, 'File in arrivo: ' + state.rowsLeft, 8, HEIGHT - 14, 12, '#c7d2fe', 'left');
+      AR.text(g, 'Nuova fila tra ' + (state.rowsLeft ? SHOTS_PER_ROW - (state.shots % SHOTS_PER_ROW) : '—') + ' tiri', WIDTH - 8, HEIGHT - 14, 12, '#c7d2fe', 'right');
+
+      // Score bar.
+      g.fillStyle = '#0f0d2b';
+      g.fillRect(0, 0, WIDTH, TOP);
+      AR.text(g, 'Punti ' + state.score, 8, TOP / 2, 14, '#fef3c7', 'left');
+      AR.text(g, 'Livello ' + state.level, WIDTH / 2, TOP / 2, 14, '#fef3c7');
+      AR.text(g, 'Record ' + Math.max(hi, state.score), WIDTH - 8, TOP / 2, 14, '#fef3c7', 'right');
     }
 
     function frame(dt) {
+      particles.forEach(function (p) {
+        p.life -= dt * (p.fall ? 1.2 : 3.5);
+        if (p.fall) {
+          p.vy += 900 * dt;
+          p.y += p.vy * dt;
+        }
+      });
+      particles = particles.filter(function (p) { return p.life > 0; });
       if (!started || state.over) return;
       const inp = AR.dirInput();
-      if (inp.left) state.angle = Math.max(-1.3, state.angle - 1.2 * dt);
-      if (inp.right) state.angle = Math.min(1.3, state.angle + 1.2 * dt);
+      if (inp.left) state.angle = Math.max(-MAX_ANGLE, state.angle - 1.3 * dt);
+      if (inp.right) state.angle = Math.min(MAX_ANGLE, state.angle + 1.3 * dt);
       update(state, dt);
       state.events.forEach(function (e) {
-        if (!A) return;
-        if (e === 'shoot') A.sfx.shoot();
-        if (e === 'pop') A.sfx.pop();
-        if (e === 'land') A.sfx.place();
+        if (e === 'pop') {
+          state.gone.forEach(function (b) { particles.push({ x: b.x, y: b.y, kind: b.kind, fall: b.fall, vy: 0, life: 1 }); });
+          if (A) A.sfx.pop();
+        }
+        if (e === 'land' && A) A.sfx.place();
+        if (e === 'row' && A) A.sfx.tick();
       });
       if (state.over) endRun();
     }
@@ -302,62 +367,70 @@
       started = false;
       if (state.score > hi) {
         hi = state.score;
-        U.store.set(hiKey, hi);
+        U.store.set('hi.bubbles', hi);
       }
       if (state.won) {
         if (A) A.sfx.win();
-        AR.overlay(wrap, 'Tutte le bolle sono scoppiate! 🦝', 'Punti: ' + state.score + ' · Migliore: ' + hi, 'Gioca ancora', newRun);
+        const next = state.level + 1;
+        const score = state.score + 100;
+        AR.overlay(wrap, 'Livello ' + state.level + ' completato! 🦝🎉', 'Punti: ' + score + ' (bonus +100)', 'Livello ' + next, function () { startLevel(next, score); });
       } else {
         if (A) A.sfx.lose();
-        AR.overlay(wrap, 'Il soffitto è sceso 🐱', 'Punti: ' + state.score + ' · Migliore: ' + hi, 'Gioca ancora', newRun);
+        AR.overlay(wrap, 'Le bolle sono scese troppo 🐱', 'Punti: ' + state.score + ' · Livello: ' + state.level + ' · Record: ' + hi, 'Gioca ancora', function () { startLevel(1, 0); });
       }
     }
 
-    function newRun() {
-      state = newGame(Math.floor(Math.random() * 1e9));
+    function startLevel(level, score) {
+      state = newGame(Math.floor(Math.random() * 1e9), level, score);
+      particles = [];
       started = true;
-      loop = loop || AR.startLoop(frame, draw);
     }
 
-    function onKey(k, down) {
-      if (down && (k === ' ' || k === 'enter' || k === 'arrowup' || k === 'w')) {
-        if (started) fire(state);
-      }
+    function shoot() {
+      if (started && fire(state) && A) A.sfx.shoot();
     }
 
     function aimFromEvent(e) {
       const rect = view.canvas.getBoundingClientRect();
       const x = ((e.clientX - rect.left) / rect.width) * WIDTH;
-      const y = ((e.clientY - rect.top) / rect.height) * 540;
-      const a = Math.atan2(x - WIDTH / 2, SHOOT_Y - y);
-      state.angle = Math.max(-1.3, Math.min(1.3, a));
+      const y = ((e.clientY - rect.top) / rect.height) * HEIGHT;
+      const a = Math.atan2(x - SHOOT_X, Math.max(10, SHOOT_Y - y));
+      state.angle = Math.max(-MAX_ANGLE, Math.min(MAX_ANGLE, a));
     }
-
     view.canvas.addEventListener('mousemove', function (e) { if (started) aimFromEvent(e); });
     view.canvas.addEventListener('mousedown', function (e) {
       if (!started) return;
       aimFromEvent(e);
-      fire(state);
+      shoot();
     });
 
-    unbind = AR.bindKeys(onKey);
-    draw();
-    AR.overlay(wrap, 'Bolle Procioni 🦝', 'Muovi il mouse per mirare, clicca per sparare. Oppure usa le frecce e Spazio. Tre bolle uguali scoppiano.', 'Inizia', newRun);
+    const unbind = AR.bindKeys(function (k, down) {
+      if (down && (k === ' ' || k === 'arrowup' || k === 'w')) shoot();
+    });
+    loop = AR.startLoop(frame, draw);
+    AR.overlay(wrap, 'Bolle Procioni 🦝', 'Mira con il mouse e fai clic per tirare. Oppure usa le frecce ← → e la barra spaziatrice. Unisci 3 bolle uguali per farle scoppiare.', 'Inizia', function () { startLevel(1, 0); });
     return {
       destroy: function () {
-        if (loop) loop.stop();
-        if (unbind) unbind();
+        loop.stop();
+        unbind();
+      },
+      debug: {
+        get state() { return state; },
+        get started() { return started; },
       },
     };
   }
 
   return {
-    meta: { id: 'bubbles', title: 'Bolle Procioni', icon: '🫧', desc: 'Spara le bolle con gli animali. Tre uguali scoppiano.' },
+    meta: { id: 'bubbles', title: 'Bolle Procioni', icon: '🔮', desc: 'Tira le bolle. Tre bolle uguali scoppiano.' },
     mount: mount,
     newGame: newGame,
     update: update,
     fire: fire,
-    dropFloating: dropFloating,
+    posOf: posOf,
+    neighbours: neighbours,
     WIDTH: WIDTH,
+    DANGER_Y: DANGER_Y,
+    MAX_ANGLE: MAX_ANGLE,
   };
 });

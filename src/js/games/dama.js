@@ -1,7 +1,12 @@
-// Dama (checkers) with Damone. Rule: a Damone can only be captured by another Damone.
-// Pedina (man): moves one step forward, captures in all four directions.
-// Damone (king): flies along diagonals, captures like a flying king.
-// Captures are mandatory. Three CPU levels: Facile, Medio, Difficile (search depth).
+// Dama italiana with the Damone. You (white, bottom) play against the Chihuahua (black, top).
+// Rules:
+// - A pedina moves one step forward on the diagonal. It captures forward only.
+// - A pedina can never capture a Damone. Only a Damone can capture a Damone.
+// - A Damone moves and captures one step in all four diagonal directions.
+// - Capture is mandatory. You must take the most pieces. With the same number,
+//   a Damone must capture before a pedina, and then the capture with more Damoni wins.
+// - A pedina that reaches the last row becomes a Damone.
+// Three CPU levels: Facile, Medio, Difficile.
 (function (name, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -11,21 +16,26 @@
   const U = isNode ? require('../core/util.js') : window.RA.modules.util;
   const A = isNode ? null : window.RA.audio;
 
-  const WHITE = 'w'; // human, moves up (row decreases)
-  const BLACK = 'b'; // CPU, moves down (row increases)
-  const DIRS = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
+  const WHITE = 'w'; // human, moves up (row index goes down)
+  const BLACK = 'b'; // CPU, moves down
   const LEVELS = {
-    facile: { label: 'Facile 🐣', depth: 2 },
-    medio: { label: 'Medio 🦝', depth: 4 },
-    difficile: { label: 'Difficile 🐺', depth: 5 },
+    facile: { label: 'Facile 🐭', depth: 2, blunder: 0.35 },
+    medio: { label: 'Medio 🐱', depth: 4, blunder: 0 },
+    difficile: { label: 'Difficile 🦝', depth: 8, blunder: 0 },
   };
-  const VALUE = { man: 1, damone: 2.4 };
+  const DRAW_PLIES = 80; // 40 moves each without a capture or a pedina move
 
+  const inside = function (r, c) { return r >= 0 && r < 8 && c >= 0 && c < 8; };
+  const rowOf = function (i) { return i >> 3; };
+  const colOf = function (i) { return i & 7; };
+  const other = function (color) { return color === WHITE ? BLACK : WHITE; };
+
+  // Pieces are { c: 'w' | 'b', d: true when Damone }. Only dark squares are used.
   function initialBoard() {
     const b = new Array(64).fill(null);
     for (let r = 0; r < 8; r++) {
       for (let c = 0; c < 8; c++) {
-        if ((r + c) % 2 === 0) continue; // only dark squares are used
+        if ((r + c) % 2 === 0) continue;
         if (r < 3) b[r * 8 + c] = { c: BLACK, d: false };
         else if (r > 4) b[r * 8 + c] = { c: WHITE, d: false };
       }
@@ -33,146 +43,120 @@
     return b;
   }
 
-  const inside = (r, c) => r >= 0 && r < 8 && c >= 0 && c < 8;
-  const rowOf = (i) => Math.floor(i / 8);
-  const colOf = (i) => i % 8;
-
-  function canTake(attacker, target) {
-    return target.c !== attacker.c && (!target.d || attacker.d);
+  function stepDirs(piece) {
+    if (piece.d) return [[-1, -1], [-1, 1], [1, -1], [1, 1]];
+    const f = piece.c === WHITE ? -1 : 1;
+    return [[f, -1], [f, 1]];
   }
 
-  // Finds capture chains for one piece standing on sq. Returns list of { path, caps }.
+  function canTake(attacker, target) {
+    return !!target && target.c !== attacker.c && (!target.d || attacker.d);
+  }
+
+  // Capture chains for the piece on sq. Each: { path: [squares], caps: [squares], damoni: n }.
   function captureChains(board, sq, piece) {
     const out = [];
-    const walk = function (b, at, path, caps) {
+    const dirs = stepDirs(piece);
+    const walk = function (b, at, path, caps, damoni) {
       let extended = false;
       const r0 = rowOf(at);
       const c0 = colOf(at);
-      DIRS.forEach(function (d) {
-        if (piece.d) {
-          // Flying: skip empty squares, then one enemy, then any empty landing beyond it.
-          let r = r0 + d[0];
-          let c = c0 + d[1];
-          while (inside(r, c) && !b[r * 8 + c]) { r += d[0]; c += d[1]; }
-          if (!inside(r, c)) return;
-          const target = b[r * 8 + c];
-          if (!canTake(piece, target)) return;
-          const x = r * 8 + c;
-          let lr = r + d[0];
-          let lc = c + d[1];
-          while (inside(lr, lc) && !b[lr * 8 + lc]) {
-            const land = lr * 8 + lc;
-            const nb = b.slice();
-            nb[at] = null;
-            nb[x] = null;
-            nb[land] = piece;
-            extended = true;
-            walk(nb, land, path.concat([land]), caps.concat([x]));
-            lr += d[0];
-            lc += d[1];
-          }
-        } else {
-          const r = r0 + d[0];
-          const c = c0 + d[1];
-          const lr = r + d[0];
-          const lc = c + d[1];
-          if (!inside(lr, lc) || !inside(r, c)) return;
-          const target = b[r * 8 + c];
-          if (!target || !canTake(piece, target)) return;
-          if (b[lr * 8 + lc]) return;
-          const x = r * 8 + c;
-          const land = lr * 8 + lc;
-          const nb = b.slice();
-          nb[at] = null;
-          nb[x] = null;
-          nb[land] = piece;
-          extended = true;
-          walk(nb, land, path.concat([land]), caps.concat([x]));
-        }
-      });
-      if (!extended && caps.length) out.push({ path: path, caps: caps });
+      for (const d of dirs) {
+        const r = r0 + d[0];
+        const c = c0 + d[1];
+        const lr = r + d[0];
+        const lc = c + d[1];
+        if (!inside(lr, lc)) continue;
+        const x = r * 8 + c;
+        const land = lr * 8 + lc;
+        if (!canTake(piece, b[x]) || b[land]) continue;
+        const nb = b.slice();
+        nb[at] = null;
+        nb[x] = null;
+        nb[land] = piece;
+        extended = true;
+        walk(nb, land, path.concat([land]), caps.concat([x]), damoni + (b[x].d ? 1 : 0));
+      }
+      if (!extended && caps.length) out.push({ path: path, caps: caps, damoni: damoni, byDamone: piece.d });
     };
-    walk(board.slice(), sq, [sq], []);
+    walk(board, sq, [sq], [], 0);
     return out;
   }
 
-  function simpleMoves(board, sq, piece) {
-    const out = [];
-    const r0 = rowOf(sq);
-    const c0 = colOf(sq);
-    if (piece.d) {
-      DIRS.forEach(function (d) {
-        let r = r0 + d[0];
-        let c = c0 + d[1];
-        while (inside(r, c) && !board[r * 8 + c]) {
-          out.push({ path: [sq, r * 8 + c], caps: [] });
-          r += d[0];
-          c += d[1];
-        }
-      });
-    } else {
-      const fwd = piece.c === WHITE ? -1 : 1;
-      [-1, 1].forEach(function (dc) {
-        const r = r0 + fwd;
-        const c = c0 + dc;
-        if (inside(r, c) && !board[r * 8 + c]) out.push({ path: [sq, r * 8 + c], caps: [] });
-      });
-    }
-    return out;
-  }
-
-  // All legal moves for one colour. Captures are mandatory when present.
+  // All legal moves for one colour: [{ from, to, path, caps }].
   function legalMoves(board, color) {
     let caps = [];
-    let simple = [];
+    const simple = [];
     for (let sq = 0; sq < 64; sq++) {
       const p = board[sq];
       if (!p || p.c !== color) continue;
-      captureChains(board, sq, p).forEach((m) => caps.push(m));
-      if (!caps.length) simple = simple.concat(simpleMoves(board, sq, p));
+      const chains = captureChains(board, sq, p);
+      if (chains.length) caps = caps.concat(chains);
+      if (caps.length) continue;
+      for (const d of stepDirs(p)) {
+        const r = rowOf(sq) + d[0];
+        const c = colOf(sq) + d[1];
+        if (inside(r, c) && !board[r * 8 + c]) simple.push({ path: [sq, r * 8 + c], caps: [] });
+      }
     }
-    const moves = caps.length ? caps : simple;
-    return moves.map((m) => ({ from: m.path[0], to: m.path[m.path.length - 1], path: m.path, caps: m.caps }));
+    let moves = simple;
+    if (caps.length) {
+      // Italian priority rules.
+      const most = Math.max.apply(null, caps.map(function (m) { return m.caps.length; }));
+      moves = caps.filter(function (m) { return m.caps.length === most; });
+      if (moves.some(function (m) { return m.byDamone; })) moves = moves.filter(function (m) { return m.byDamone; });
+      const mostDamoni = Math.max.apply(null, moves.map(function (m) { return m.damoni; }));
+      moves = moves.filter(function (m) { return m.damoni === mostDamoni; });
+    }
+    return moves.map(function (m) {
+      return { from: m.path[0], to: m.path[m.path.length - 1], path: m.path, caps: m.caps };
+    });
   }
 
   function applyMove(board, mv) {
     const nb = board.slice();
     let piece = nb[mv.from];
     nb[mv.from] = null;
-    mv.caps.forEach((x) => { nb[x] = null; });
-    const last = mv.to;
-    const promoRow = piece.c === WHITE ? 0 : 7;
-    if (!piece.d && rowOf(last) === promoRow) piece = { c: piece.c, d: true };
-    nb[last] = piece;
+    for (const x of mv.caps) nb[x] = null;
+    if (!piece.d && rowOf(mv.to) === (piece.c === WHITE ? 0 : 7)) piece = { c: piece.c, d: true };
+    nb[mv.to] = piece;
     return nb;
   }
 
-  function evaluate(board, forColor) {
+  function evaluate(board, color) {
     let score = 0;
     for (let sq = 0; sq < 64; sq++) {
       const p = board[sq];
       if (!p) continue;
-      const sign = p.c === forColor ? 1 : -1;
-      let v = p.d ? VALUE.damone : VALUE.man;
-      if (!p.d) {
-        const progress = p.c === WHITE ? 7 - rowOf(sq) : rowOf(sq);
-        v += progress * 0.04;
+      let v;
+      if (p.d) {
+        v = 270;
+      } else {
+        const r = rowOf(sq);
+        const advance = p.c === WHITE ? 7 - r : r;
+        v = 100 + advance * 4;
+        // Pieces on the home row stop the other side from making a Damone.
+        if (advance === 0) v += 8;
       }
-      score += sign * v;
+      const col = colOf(sq);
+      if (col >= 2 && col <= 5) v += 3;
+      score += p.c === color ? v : -v;
     }
     return score;
   }
 
-  // Alpha-beta search. Returns best score for side to move.
-  function minimax(board, color, depth, alpha, beta) {
+  // Negamax with alpha-beta. Score is from the point of view of the side to move.
+  function search(board, color, depth, alpha, beta) {
     const moves = legalMoves(board, color);
-    if (moves.length === 0) return -1000 - depth;
-    if (depth === 0) return evaluate(board, color);
-    const other = color === WHITE ? BLACK : WHITE;
+    if (moves.length === 0) return -100000 - depth;
+    if (depth <= 0) {
+      // Do not stop in the middle of an exchange.
+      if (!moves[0].caps.length) return evaluate(board, color);
+      depth = 1;
+    }
     let best = -Infinity;
     for (const mv of moves) {
-      const nb = applyMove(board, mv);
-      const score = -minimax(nb, other, depth - 1, -beta, -alpha);
+      const score = -search(applyMove(board, mv), other(color), depth - 1, -beta, -alpha);
       if (score > best) best = score;
       if (best > alpha) alpha = best;
       if (alpha >= beta) break;
@@ -180,192 +164,214 @@
     return best;
   }
 
-  // Chooses the CPU move for the given level.
-  function cpuMove(board, color, depth, rnd) {
-    const moves = legalMoves(board, color);
+  // Chooses the CPU move. level is a key of LEVELS.
+  function cpuMove(board, color, level, rnd) {
+    const cfg = LEVELS[level] || LEVELS.medio;
+    const moves = U.shuffle(legalMoves(board, color), rnd);
     if (!moves.length) return null;
-    const other = color === WHITE ? BLACK : WHITE;
+    if (moves.length === 1) return moves[0];
+    if (cfg.blunder && rnd() < cfg.blunder) return moves[0];
     let best = null;
     let bestScore = -Infinity;
-    U.shuffle(moves.slice(), rnd).forEach((mv) => {
-      const nb = applyMove(board, mv);
-      let score = -minimax(nb, other, depth - 1, -Infinity, Infinity);
-      score += rnd() * 0.01; // break ties differently each game
+    for (const mv of moves) {
+      // Full window for every root move, so equal moves keep their random order.
+      const score = -search(applyMove(board, mv), other(color), cfg.depth - 1, -Infinity, -bestScore + 1);
       if (score > bestScore) {
         bestScore = score;
         best = mv;
       }
-    });
+    }
     return best;
   }
 
+  function countPieces(board, color) {
+    let n = 0;
+    for (const p of board) if (p && p.c === color) n += 1;
+    return n;
+  }
+
   // ---------- Browser interface ----------
-  function mount(container, ctx) {
+  function mount(container) {
     let alive = true;
-    let timer = null;
-    let rnd = U.makeRng();
+    const timers = [];
+    const rnd = U.makeRng();
     let level = U.store.get('dama.level', 'facile');
+    if (!LEVELS[level]) level = 'facile';
     let board = initialBoard();
     let turn = WHITE;
     let selected = null;
-    let targets = [];
     let quietPlies = 0;
-    let over = null;
+    let over = null; // 'human' | 'cpu' | 'draw'
     let thinking = false;
-    let wins = { human: U.store.get('dama.wins', 0), cpu: 0 };
+    let lastMove = null;
+    let note = '';
+    const wins = U.store.get('dama.score', { human: 0, cpu: 0 });
     const root = U.el('div', { class: 'dama game-panel' });
     container.appendChild(root);
 
     function reset() {
+      timers.forEach(clearTimeout);
       board = initialBoard();
       turn = WHITE;
       selected = null;
-      targets = [];
       quietPlies = 0;
       over = null;
       thinking = false;
+      lastMove = null;
+      note = '';
       render();
     }
 
-    function checkEnd() {
-      const moves = legalMoves(board, turn);
-      if (moves.length === 0) {
-        over = turn === WHITE ? 'cpu' : 'human';
-        if (over === 'human') {
-          wins.human += 1;
-          U.store.set('dama.wins', wins.human);
-        } else {
-          wins.cpu += 1;
-        }
-        if (A) over === 'human' ? A.sfx.win() : A.sfx.lose();
-        return true;
-      }
-      if (quietPlies >= 80) {
-        over = 'draw';
-        return true;
-      }
-      return false;
+    function finish(result) {
+      over = result;
+      if (result === 'human') wins.human += 1;
+      if (result === 'cpu') wins.cpu += 1;
+      U.store.set('dama.score', wins);
+      if (A) result === 'human' ? A.sfx.win() : A.sfx.lose();
     }
 
     function playMove(mv) {
-      const wasCapture = mv.caps.length > 0;
-      const piece = board[mv.from];
-      const wasMan = !piece.d;
+      const wasMan = !board[mv.from].d;
       board = applyMove(board, mv);
-      const promoted = wasMan && board[mv.to].d;
-      quietPlies = wasCapture || promoted ? 0 : quietPlies + 1;
-      if (A) wasCapture ? A.sfx.pop() : A.sfx.place();
-      turn = turn === WHITE ? BLACK : WHITE;
+      quietPlies = mv.caps.length || wasMan ? 0 : quietPlies + 1;
+      lastMove = mv;
+      if (A) mv.caps.length ? A.sfx.pop() : A.sfx.place();
+      if (A && wasMan && board[mv.to].d) A.sfx.power();
+      turn = other(turn);
       selected = null;
-      targets = [];
+      if (!legalMoves(board, turn).length) finish(turn === WHITE ? 'cpu' : 'human');
+      else if (quietPlies >= DRAW_PLIES) finish('draw');
     }
 
     function cpuTurn() {
-      if (!alive || over || turn !== BLACK) return;
       thinking = true;
       render();
-      timer = setTimeout(function () {
+      timers.push(setTimeout(function () {
         if (!alive) return;
-        const mv = cpuMove(board, BLACK, LEVELS[level].depth, rnd);
+        const mv = cpuMove(board, BLACK, level, rnd);
         thinking = false;
         if (mv) playMove(mv);
-        if (checkEnd()) return render();
+        note = mv && mv.caps.length ? 'Il Chihuahua ha mangiato ' + mv.caps.length + (mv.caps.length === 1 ? ' pezzo.' : ' pezzi.') : '';
         render();
-      }, 450);
+      }, 500));
     }
 
     function clickSquare(sq) {
       if (over || turn !== WHITE || thinking) return;
-      const p = board[sq];
       const moves = legalMoves(board, WHITE);
       if (selected !== null) {
-        const mv = moves.find((m) => m.from === selected && m.to === sq);
+        const mv = moves.find(function (m) { return m.from === selected && m.to === sq; });
         if (mv) {
           playMove(mv);
-          if (!checkEnd()) cpuTurn();
-          return render();
-        }
-        if (p && p.c === WHITE) {
-          // Switch selection to another own piece.
-        } else {
-          selected = null;
-          targets = [];
-          return render();
-        }
-      }
-      if (p && p.c === WHITE) {
-        const own = moves.filter((m) => m.from === sq);
-        if (!own.length) {
-          if (A) A.sfx.bad();
+          note = '';
+          render();
+          if (!over) cpuTurn();
           return;
         }
-        selected = sq;
-        targets = own.map((m) => m.to);
-        if (A) A.sfx.click();
-        render();
       }
+      const p = board[sq];
+      if (p && p.c === WHITE) {
+        if (moves.some(function (m) { return m.from === sq; })) {
+          selected = selected === sq ? null : sq;
+          note = '';
+          if (A) A.sfx.click();
+        } else {
+          selected = null;
+          note = moves[0].caps.length ? 'Devi mangiare: muovi un pezzo con il bordo verde.' : 'Questo pezzo non può muoversi.';
+          if (A) A.sfx.bad();
+        }
+      } else {
+        selected = null;
+      }
+      render();
     }
 
     function render() {
       if (!alive) return;
       root.innerHTML = '';
-      root.appendChild(U.el('div', { class: 'dama-top' },
-        U.el('span', { text: 'Tu: pedine e damoni (bianchi)' }),
-        U.el('span', { text: 'Gatto: (neri) · Vittorie tue: ' + wins.human }) ));
+      const myTurn = !over && turn === WHITE && !thinking;
+      const moves = myTurn ? legalMoves(board, WHITE) : [];
+      const movable = new Set(moves.map(function (m) { return m.from; }));
+      const targets = new Set(moves.filter(function (m) { return m.from === selected; }).map(function (m) { return m.to; }));
+      const mustCapture = moves.length > 0 && moves[0].caps.length > 0;
+
+      root.appendChild(U.el('div', { class: 'pill-row' },
+        U.el('div', { class: 'pill', text: '🐭 Tu: ' + countPieces(board, WHITE) + ' pezzi' }),
+        U.el('div', { class: 'pill', text: '🐕 Chihuahua: ' + countPieces(board, BLACK) + ' pezzi' }),
+        U.el('div', { class: 'pill', text: 'Vittorie: ' + wins.human + ' - ' + wins.cpu })));
+
       const boardEl = U.el('div', { class: 'checker-board' });
       for (let sq = 0; sq < 64; sq++) {
-        const r = rowOf(sq);
-        const c = colOf(sq);
-        const dark = (r + c) % 2 === 1;
+        const dark = (rowOf(sq) + colOf(sq)) % 2 === 1;
         const cls = ['sq', dark ? 'dark' : 'light'];
         if (selected === sq) cls.push('sel');
-        if (targets.indexOf(sq) >= 0) cls.push('target');
-        const cell = U.el('div', { class: cls.join(' '), onclick: function () { if (dark) clickSquare(sq); } });
+        if (targets.has(sq)) cls.push('target');
+        if (lastMove && (lastMove.from === sq || lastMove.to === sq)) cls.push('last');
+        const cell = U.el('div', { class: cls.join(' '), 'data-sq': sq, onclick: dark ? function () { clickSquare(sq); } : null });
         const p = board[sq];
         if (p) {
-          const piece = U.el('div', { class: 'piece ' + (p.c === WHITE ? 'white' : 'black') + (p.d ? ' damone' : '') });
-          piece.textContent = p.d ? (p.c === WHITE ? '🦝' : '🐱') : (p.c === WHITE ? '🐭' : '🐕');
+          const pc = ['piece', p.c === WHITE ? 'white' : 'black'];
+          if (p.d) pc.push('damone');
+          if (movable.has(sq)) pc.push(mustCapture ? 'must' : 'movable');
+          const icon = p.c === WHITE ? (p.d ? '🦝' : '🐭') : (p.d ? '🐱' : '🐕');
+          const piece = U.el('div', { class: pc.join(' ') }, U.el('span', { text: icon }));
           if (p.d) piece.appendChild(U.el('span', { class: 'crown', text: '👑' }));
           cell.appendChild(piece);
         }
         boardEl.appendChild(cell);
       }
       root.appendChild(boardEl);
-      const msg = over
-        ? (over === 'human' ? 'Hai vinto! 🦝🎉' : over === 'cpu' ? 'Ha vinto il Gatto 🐱' : 'Patta: troppe mosse senza catture.')
-        : (thinking ? 'Il Gatto sta pensando...' : (turn === WHITE ? 'Tocca una tua pedina, poi la casella di arrivo.' : 'Turno del Gatto.'));
-      root.appendChild(U.el('div', { class: 'msg', text: msg }));
-      root.appendChild(U.el('div', { class: 'levels' },
-        Object.keys(LEVELS).map(function (k) {
-          return U.el('button', { class: 'btn ' + (k === level ? '' : 'ghost'), text: LEVELS[k].label, onclick: function () {
+
+      let msg = note;
+      if (over) msg = over === 'human' ? 'Hai vinto! 🦝🏆' : over === 'cpu' ? 'Ha vinto il Chihuahua 🐕' : 'Patta: 40 mosse senza catture.';
+      else if (thinking) msg = 'Il Chihuahua sta pensando…';
+      else if (!msg) msg = mustCapture ? 'Devi mangiare. Tocca un pezzo con il bordo verde.' : (selected === null ? 'Tocca un tuo pezzo, poi la casella di arrivo.' : 'Ora tocca una casella con il pallino verde.');
+      root.appendChild(U.el('div', { class: 'msg' + (over ? ' big' : ''), text: msg }));
+
+      const levels = U.el('div', { class: 'levels' }, U.el('span', { class: 'hint', text: 'Livello:' }));
+      Object.keys(LEVELS).forEach(function (k) {
+        levels.appendChild(U.el('button', {
+          class: 'btn ' + (k === level ? '' : 'ghost'),
+          'data-level': k,
+          text: LEVELS[k].label,
+          onclick: function () {
             level = k;
             U.store.set('dama.level', k);
-            reset();
-          } });
-        })));
-      root.appendChild(U.el('div', { class: 'actions' },
-        U.el('button', { class: 'btn', text: 'Nuova partita', onclick: reset }),
-        U.el('span', { class: 'hint', text: 'Damone: solo un altro damone lo può mangiare.' })));
-      root.appendChild(U.el('p', { class: 'small-list', text: 'Le pedine possono mangiare in ogni direzione. Le catture sono obbligatorie.' }));
+            render();
+          },
+        }));
+      });
+      levels.appendChild(U.el('button', { class: 'btn ghost', text: 'Nuova partita', onclick: reset }));
+      root.appendChild(levels);
+      root.appendChild(U.el('div', { class: 'hint', text: '🐭 pedina → 🦝 Damone (tuo) · 🐕 pedina → 🐱 Damone (Chihuahua). Il Damone si mangia solo con un altro Damone. Le pedine mangiano solo in avanti.' }));
     }
 
     render();
     return {
       destroy: function () {
         alive = false;
-        if (timer) clearTimeout(timer);
+        timers.forEach(clearTimeout);
+      },
+      debug: {
+        get board() { return board; },
+        get turn() { return turn; },
+        get over() { return over; },
+        get thinking() { return thinking; },
+        get level() { return level; },
+        legalMoves: function () { return legalMoves(board, turn); },
       },
     };
   }
 
   return {
-    meta: { id: 'dama', title: 'Dama', icon: '⛀', desc: 'Dama con Damone. Il Damone si mangia solo con un altro Damone.' },
+    meta: { id: 'dama', title: 'Dama', icon: '👑', desc: 'Dama italiana con il Damone: solo un Damone può mangiare un Damone.' },
     mount: mount,
     LEVELS: LEVELS,
     initialBoard: initialBoard,
     legalMoves: legalMoves,
     applyMove: applyMove,
     cpuMove: cpuMove,
+    evaluate: evaluate,
     WHITE: WHITE,
     BLACK: BLACK,
   };

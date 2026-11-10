@@ -170,7 +170,7 @@
 
     // Enemy fire from the lowest alive invader of a random column.
     state.fireAcc += dt;
-    const fireEvery = Math.max(0.35, 1.4 - (state.wave - 1) * 0.12);
+    const fireEvery = Math.max(0.45, 1.7 - (state.wave - 1) * 0.15);
     if (state.fireAcc >= fireEvery) {
       state.fireAcc = 0;
       const lowest = {};
@@ -187,7 +187,7 @@
     }
 
     // Enemy bullets.
-    state.eBullets.forEach((b) => { b.y += (200 + state.wave * 20) * dt; });
+    state.eBullets.forEach((b) => { b.y += (170 + state.wave * 20) * dt; });
     state.eBullets = state.eBullets.filter((b) => {
       if (b.y > H) return false;
       if (hitShield(state, b.x - 2, b.y - 6, 4, 12)) return false;
@@ -233,57 +233,55 @@
   }
 
   // ---------- Browser interface ----------
-  function mount(container, ctx) {
+  function mount(container) {
     const wrap = U.el('div', { class: 'arcade-stage' });
     container.appendChild(wrap);
     const view = AR.createCanvas(wrap, W, H, 'invaders');
     const g = view.ctx;
-    const hiKey = 'invaders';
-    let hi = U.store.get(hiKey, 0);
+    let hi = U.store.get('hi.invaders', 0);
     let state = newGame(1);
     let started = false;
-    let loop = null;
-    let unbind = null;
-    let fireHeld = false;
+    const stars = [];
+    for (let i = 0; i < 60; i++) stars.push({ x: (i * 97) % W, y: (i * 151) % H, s: 1 + (i % 3) * 0.5 });
 
     function draw() {
       g.fillStyle = '#0b1026';
       g.fillRect(0, 0, W, H);
-      // Stars.
-      g.fillStyle = 'rgba(255,255,255,0.5)';
-      for (let i = 0; i < 40; i++) g.fillRect((i * 97) % W, (i * 53) % H, 2, 2);
+      g.fillStyle = 'rgba(255,255,255,0.55)';
+      stars.forEach(function (s) { g.fillRect(s.x, s.y, s.s, s.s); });
+      // The city to defend.
+      AR.emoji(g, '🏠', 40, H - 14, 18);
+      AR.emoji(g, '🌳', W / 2, H - 14, 18);
+      AR.emoji(g, '🏠', W - 40, H - 14, 18);
+      g.fillStyle = '#84cc16';
       state.shields.forEach(function (block) {
         block.forEach(function (c) {
-          if (c.alive) {
-            g.fillStyle = '#84cc16';
-            g.fillRect(c.x, c.y, SHIELD_CELL - 1, SHIELD_CELL - 1);
-          }
+          if (c.alive) g.fillRect(c.x, c.y, SHIELD_CELL - 1, SHIELD_CELL - 1);
         });
       });
       state.invaders.forEach(function (inv) {
         if (!inv.alive) return;
         const p = invaderPos(state, inv);
-        AR.emoji(g, TYPES[inv.type].emoji, p.x, p.y, 26);
+        AR.emoji(g, TYPES[inv.type].emoji, p.x, p.y, 25);
       });
-      // Player.
-      if (!(state.invuln > 0 && Math.floor(state.invuln * 10) % 2 === 0)) {
+      if (!(state.invuln > 0 && Math.floor(state.invuln * 10) % 2 === 0) && !state.over) {
         AR.emoji(g, '🦝', state.px, PLAYER_Y, 34);
       }
       g.fillStyle = '#facc15';
-      state.pBullets.forEach((b) => g.fillRect(b.x - 2, b.y, 4, 12));
-      state.eBullets.forEach((b) => AR.emoji(g, '🦴', b.x, b.y, 14));
-      AR.text(g, 'Punti ' + state.score, 8, 14, 14, '#fef3c7', 'left');
-      AR.text(g, 'Migliore ' + Math.max(hi, state.score), W / 2, 14, 14, '#fef3c7');
-      AR.text(g, 'Vite ' + '🦝'.repeat(Math.max(0, state.lives)), W - 8, 14, 14, '#fef3c7', 'right');
-      AR.text(g, 'Ondata ' + state.wave, W / 2, H - 14, 12, '#94a3b8');
+      state.pBullets.forEach(function (b) { g.fillRect(b.x - 2, b.y, 4, 12); });
+      state.eBullets.forEach(function (b) { AR.emoji(g, '🦴', b.x, b.y, 14); });
+      g.fillStyle = '#0f0d2b';
+      g.fillRect(0, 0, W, 30);
+      AR.text(g, 'Punti ' + state.score, 8, 15, 14, '#fef3c7', 'left');
+      AR.text(g, 'Ondata ' + state.wave + ' · Record ' + Math.max(hi, state.score), W / 2, 15, 14, '#fef3c7');
+      AR.text(g, 'Vite', W - 76, 15, 14, '#fef3c7', 'right');
+      for (let i = 0; i < state.lives; i++) AR.emoji(g, '🦝', W - 60 + i * 22, 16, 16);
     }
 
-    // Called by the loop every frame. Uses the game logic function update(state, dt, input).
+    // Called by the loop. Uses the game logic function update(state, dt, input).
     function frame(dt) {
       if (!started || state.over) return;
-      const inp = AR.dirInput();
-      const input = { left: inp.left, right: inp.right, fire: inp.fire || fireHeld };
-      update(state, dt, input);
+      update(state, dt, AR.dirInput());
       state.events.forEach(function (e) {
         if (!A) return;
         if (e === 'shoot') A.sfx.shoot();
@@ -298,29 +296,28 @@
       started = false;
       if (state.score > hi) {
         hi = state.score;
-        U.store.set(hiKey, hi);
+        U.store.set('hi.invaders', hi);
       }
       if (A) A.sfx.lose();
-      AR.overlay(wrap, 'Il Gatto ha vinto 🐱', 'Punti: ' + state.score + ' · Ondata: ' + state.wave + ' · Migliore: ' + hi, 'Gioca ancora', newRun);
+      AR.overlay(wrap, 'La città è invasa! 🐱', 'Punti: ' + state.score + ' · Ondata: ' + state.wave + ' · Record: ' + hi, 'Gioca ancora', newRun);
     }
 
     function newRun() {
       state = newGame(Math.floor(Math.random() * 1e9));
       started = true;
-      loop = loop || AR.startLoop(frame, draw);
     }
 
-    function onKey(k, down) {
-      if (k === ' ' || k === 'enter') fireHeld = down;
-    }
-
-    unbind = AR.bindKeys(onKey);
-    draw();
-    AR.overlay(wrap, 'Raccoon Defender 🦝', 'Frecce o A/D per muoverti. Spazio per sparare. Difendi la città dai gatti, dai topi e dai chihuahua.', 'Inizia', newRun);
+    const unbind = AR.bindKeys(function () {});
+    const loop = AR.startLoop(frame, draw);
+    AR.overlay(wrap, 'Raccoon Defender 🦝', 'Frecce ← → per muoverti. Barra spaziatrice per sparare. Ferma gatti, topi e chihuahua prima che arrivino in città.', 'Inizia', newRun);
     return {
       destroy: function () {
-        if (loop) loop.stop();
-        if (unbind) unbind();
+        loop.stop();
+        unbind();
+      },
+      debug: {
+        get state() { return state; },
+        get started() { return started; },
       },
     };
   }

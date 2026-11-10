@@ -81,50 +81,83 @@
     tick: function () { tone(1200, 0.02, 'square', 0.03); },
   };
 
-  // Soft ambient: low drone plus random pentatonic bells. Used by Mahjong.
+  // Soft ambient for Mahjong: a low drone plus slow plucked notes on a Chinese pentatonic scale.
   let ambientTimer = null;
   let droneNodes = null;
+  let ambientWanted = false;
+  function pluck(freq, vol, delay) {
+    const c = context();
+    if (!c || muted) return;
+    const t0 = c.currentTime + (delay || 0);
+    const osc = c.createOscillator();
+    const g = c.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(freq, t0);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 2.4);
+    osc.connect(g);
+    g.connect(masterGain);
+    osc.start(t0);
+    osc.stop(t0 + 2.5);
+  }
   function startAmbient() {
-    stopAmbient();
+    ambientWanted = true;
+    stopAmbientNodes();
     if (muted) return;
     const c = context();
     if (!c) return;
-    const osc = c.createOscillator();
     const lp = c.createBiquadFilter();
     const g = c.createGain();
-    osc.type = 'sine';
-    osc.frequency.value = 110;
     lp.type = 'lowpass';
-    lp.frequency.value = 300;
-    g.gain.value = 0.05;
-    osc.connect(lp);
+    lp.frequency.value = 260;
+    g.gain.value = 0.035;
+    const oscs = [98, 146.83].map(function (f) {
+      const osc = c.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = f;
+      osc.connect(lp);
+      osc.start();
+      return osc;
+    });
     lp.connect(g);
     g.connect(masterGain);
-    osc.start();
-    droneNodes = { osc: osc, g: g };
-    const scale = [523.25, 587.33, 659.25, 783.99, 880, 1046.5];
-    const bell = function () {
+    droneNodes = { oscs: oscs, g: g };
+    // G major pentatonic: G A B D E.
+    const scale = [392, 440, 493.88, 587.33, 659.25, 783.99, 880];
+    let last = 3;
+    const play = function () {
       if (!ambientTimer) return;
-      const f = scale[Math.floor(Math.random() * scale.length)];
-      tone(f, 1.6, 'sine', 0.06);
-      ambientTimer = setTimeout(bell, 1800 + Math.random() * 2600);
+      // Walk to a near note, so the melody sounds calm.
+      last = Math.max(0, Math.min(scale.length - 1, last + Math.floor(Math.random() * 5) - 2));
+      pluck(scale[last], 0.07, 0);
+      if (Math.random() < 0.35) pluck(scale[Math.max(0, last - 2)], 0.05, 0.45);
+      ambientTimer = setTimeout(play, 1700 + Math.random() * 2300);
     };
-    ambientTimer = setTimeout(bell, 800);
+    ambientTimer = setTimeout(play, 600);
   }
-  function stopAmbient() {
+  function stopAmbientNodes() {
     if (ambientTimer) clearTimeout(ambientTimer);
     ambientTimer = null;
     if (droneNodes) {
-      try { droneNodes.osc.stop(); } catch (e) { /* already stopped */ }
+      droneNodes.oscs.forEach(function (o) {
+        try { o.stop(); } catch (e) { /* already stopped */ }
+      });
+      try { droneNodes.g.disconnect(); } catch (e) { /* ignore */ }
       droneNodes = null;
     }
+  }
+  function stopAmbient() {
+    ambientWanted = false;
+    stopAmbientNodes();
   }
 
   function setMuted(m) {
     muted = !!m;
     store.set('muted', muted);
-    if (muted) stopAmbient();
     if (masterGain && ctx) masterGain.gain.value = muted ? 0 : 0.5;
+    if (muted) stopAmbientNodes();
+    else if (ambientWanted) startAmbient();
   }
 
   RA.audio = {

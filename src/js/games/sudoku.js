@@ -9,9 +9,9 @@
   const A = isNode ? null : window.RA.audio;
 
   const LEVELS = {
-    facile: { label: 'Facile 🐣', givens: 40 },
-    medio: { label: 'Medio 🦝', givens: 32 },
-    difficile: { label: 'Difficile 🐺', givens: 26 },
+    facile: { label: 'Facile 🐭', givens: 42 },
+    medio: { label: 'Medio 🐱', givens: 33 },
+    difficile: { label: 'Difficile 🦝', givens: 26 },
   };
 
   // Board is a flat array of 81 numbers, 0 = empty.
@@ -115,105 +115,169 @@
   }
 
   // ---------- Browser interface ----------
-  function mount(container, ctx) {
+  function mount(container) {
     let alive = true;
     let level = U.store.get('sudoku.level', 'facile');
+    if (!LEVELS[level]) level = 'facile';
     let game = null;
     let board = null;
     let selected = -1;
     let showErrors = false;
     let startedAt = Date.now();
-    let timer = null;
+    let endedAt = null;
     let mistakes = 0;
+    let hints = 0;
+    let won = false;
     const root = U.el('div', { class: 'sudoku game-panel' });
     container.appendChild(root);
 
+    function elapsed() {
+      const secs = Math.floor(((endedAt || Date.now()) - startedAt) / 1000);
+      const m = Math.floor(secs / 60);
+      const s = secs % 60;
+      return m + ':' + (s < 10 ? '0' : '') + s;
+    }
+
+    const clock = setInterval(function () {
+      const node = root.querySelector('.clock');
+      if (node && !won) node.textContent = elapsed();
+    }, 1000);
+
     function newGame() {
-      const rnd = U.makeRng();
-      game = generatePuzzle(level, rnd);
+      game = generatePuzzle(level, U.makeRng());
       board = game.puzzle.slice();
       selected = -1;
       mistakes = 0;
+      hints = 0;
       showErrors = false;
+      won = false;
       startedAt = Date.now();
+      endedAt = null;
       render();
     }
 
+    function checkWin() {
+      if (!isSolved(board, game.solution)) return false;
+      won = true;
+      endedAt = Date.now();
+      selected = -1;
+      if (A) A.sfx.win();
+      return true;
+    }
+
     function setValue(v) {
-      if (selected < 0 || game.givens[selected]) return;
+      if (won || selected < 0 || game.givens[selected]) return;
+      if (board[selected] === v) return;
       board[selected] = v;
       if (v !== 0 && v !== game.solution[selected]) {
         mistakes += 1;
         if (A) A.sfx.bad();
-      } else if (v !== 0 && A) {
+      } else if (A) {
         A.sfx.click();
       }
-      if (isSolved(board, game.solution)) {
-        if (A) A.sfx.win();
-        return render(true);
-      }
+      checkWin();
       render();
     }
 
     function hint() {
-      const empty = [];
-      for (let i = 0; i < 81; i++) if (board[i] !== game.solution[i]) empty.push(i);
-      if (!empty.length) return;
-      const i = selected >= 0 && board[selected] !== game.solution[selected] ? selected : empty[0];
+      if (won) return;
+      const wrong = [];
+      for (let i = 0; i < 81; i++) if (board[i] !== game.solution[i]) wrong.push(i);
+      if (!wrong.length) return;
+      const i = selected >= 0 && board[selected] !== game.solution[selected] ? selected : wrong[Math.floor(Math.random() * wrong.length)];
       board[i] = game.solution[i];
       selected = i;
-      if (isSolved(board, game.solution)) return render(true);
+      hints += 1;
+      if (A) A.sfx.ok();
+      checkWin();
       render();
     }
 
-    function render(won) {
+    function render() {
       if (!alive) return;
       root.innerHTML = '';
-      const bad = showErrors ? new Set([...conflicts(board), ...board.map((v, i) => (v && v !== game.solution[i] ? i : -1)).filter((x) => x >= 0)]) : new Set();
+      const bad = new Set();
+      if (showErrors) {
+        board.forEach(function (v, i) { if (v && v !== game.solution[i]) bad.add(i); });
+      }
+      const selValue = selected >= 0 ? board[selected] : 0;
+      const sr = Math.floor(selected / 9);
+      const sc = selected % 9;
       const grid = U.el('div', { class: 'sudoku-grid' });
-      const mins = Math.floor((Date.now() - startedAt) / 60000);
       for (let i = 0; i < 81; i++) {
         const r = Math.floor(i / 9);
         const c = i % 9;
         const cls = ['cell'];
         if (game.givens[i]) cls.push('given');
         if (selected === i) cls.push('sel');
-        else if (selected >= 0 && (Math.floor(selected / 9) === r || selected % 9 === c || (Math.floor(selected / 27) === Math.floor(r / 3) && Math.floor((selected % 9) / 3) === Math.floor(c / 3)))) cls.push('peer');
+        else if (selected >= 0 && (r === sr || c === sc || (Math.floor(r / 3) === Math.floor(sr / 3) && Math.floor(c / 3) === Math.floor(sc / 3)))) cls.push('peer');
+        if (selValue && board[i] === selValue && selected !== i) cls.push('same');
         if (bad.has(i)) cls.push('bad');
         if (c % 3 === 2 && c < 8) cls.push('br');
         if (r % 3 === 2 && r < 8) cls.push('bb');
         grid.appendChild(U.el('div', {
           class: cls.join(' '),
+          'data-i': i,
           text: board[i] ? String(board[i]) : '',
-          onclick: won || alive === false ? null : function () { selected = i; render(); },
+          onclick: function () {
+            if (won) return;
+            selected = i;
+            render();
+          },
         }));
       }
+      root.appendChild(U.el('div', { class: 'pill-row' },
+        U.el('div', { class: 'pill' }, '⏱ ', U.el('span', { class: 'clock', text: elapsed() })),
+        U.el('div', { class: 'pill', text: 'Errori: ' + mistakes }),
+        U.el('div', { class: 'pill', text: 'Aiuti: ' + hints })));
       root.appendChild(grid);
 
+      const counts = new Array(10).fill(0);
+      board.forEach(function (v) { counts[v] += 1; });
       const pad = U.el('div', { class: 'pad' });
       for (let v = 1; v <= 9; v++) {
-        pad.appendChild(U.el('button', { class: 'btn num', text: String(v), onclick: function () { if (!won) setValue(v); } }));
+        pad.appendChild(U.el('button', {
+          class: 'btn num' + (counts[v] >= 9 ? ' done' : ''),
+          text: String(v),
+          title: 'Mancano ' + Math.max(0, 9 - counts[v]),
+          onclick: function () { setValue(v); },
+        }));
       }
-      pad.appendChild(U.el('button', { class: 'btn num erase', text: '⌫', onclick: function () { if (!won) setValue(0); } }));
+      pad.appendChild(U.el('button', { class: 'btn num erase', text: '⌫', title: 'Cancella', onclick: function () { setValue(0); } }));
       root.appendChild(pad);
 
+      root.appendChild(U.el('div', { class: 'msg', text: won
+        ? 'Bravo! Sudoku completato in ' + elapsed() + ' 🦝🎉'
+        : 'Tocca una casella, poi un numero. Puoi usare anche la tastiera.' }));
       const levelButtons = U.el('div', { class: 'levels' });
       Object.keys(LEVELS).forEach(function (k) {
-        levelButtons.appendChild(U.el('button', { class: 'btn ' + (k === level ? '' : 'ghost'), text: LEVELS[k].label, onclick: function () { level = k; U.store.set('sudoku.level', k); newGame(); } }));
+        levelButtons.appendChild(U.el('button', {
+          class: 'btn ' + (k === level ? '' : 'ghost'),
+          text: LEVELS[k].label,
+          onclick: function () {
+            level = k;
+            U.store.set('sudoku.level', k);
+            newGame();
+          },
+        }));
       });
       root.appendChild(levelButtons);
       root.appendChild(U.el('div', { class: 'actions' },
-        U.el('button', { class: 'btn', text: showErrors ? 'Nascondi errori' : 'Controlla errori', onclick: function () { showErrors = !showErrors; render(); } }),
-        U.el('button', { class: 'btn', text: 'Suggerimento 💡', onclick: function () { if (!won) hint(); } }),
-        U.el('button', { class: 'btn ghost', text: 'Nuovo', onclick: newGame })));
-      root.appendChild(U.el('div', { class: 'msg', text: won ? 'Bravo! Sudoku completato 🦝🎉 Errori: ' + mistakes : 'Tempo: ' + Math.max(0, mins) + ' min · Errori: ' + mistakes + ' · Usa i numeri 1-9 o la tastiera.' }));
+        U.el('button', { class: 'btn', text: showErrors ? 'Nascondi errori' : 'Mostra errori', onclick: function () { showErrors = !showErrors; render(); } }),
+        U.el('button', { class: 'btn', text: 'Aiuto 💡', onclick: hint }),
+        U.el('button', { class: 'btn ghost', text: 'Nuovo sudoku', onclick: newGame })));
     }
 
     function onKey(e) {
-      if (!alive) return;
-      if (e.key >= '1' && e.key <= '9') setValue(Number(e.key));
-      else if (e.key === 'Backspace' || e.key === 'Delete' || e.key === '0') setValue(0);
-      else if (e.key.indexOf('Arrow') === 0 && selected >= 0) {
+      if (!alive || won || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key >= '1' && e.key <= '9') {
+        setValue(Number(e.key));
+      } else if (e.key === 'Backspace' || e.key === 'Delete' || e.key === '0') {
+        e.preventDefault();
+        setValue(0);
+      } else if (e.key.indexOf('Arrow') === 0) {
+        e.preventDefault();
+        if (selected < 0) selected = 40;
         let r = Math.floor(selected / 9);
         let c = selected % 9;
         if (e.key === 'ArrowUp') r = Math.max(0, r - 1);
@@ -230,14 +294,20 @@
     return {
       destroy: function () {
         alive = false;
+        clearInterval(clock);
         document.removeEventListener('keydown', onKey);
-        if (timer) clearInterval(timer);
+      },
+      debug: {
+        get game() { return game; },
+        get board() { return board; },
+        get won() { return won; },
+        get level() { return level; },
       },
     };
   }
 
   return {
-    meta: { id: 'sudoku', title: 'Sudoku', icon: '🔢', desc: 'Sudoku a 3 livelli. Ogni puzzle ha una sola soluzione.' },
+    meta: { id: 'sudoku', title: 'Sudoku', icon: '🔢', desc: 'Sudoku con 3 livelli. Ogni schema ha una sola soluzione.' },
     mount: mount,
     LEVELS: LEVELS,
     generatePuzzle: generatePuzzle,

@@ -21,6 +21,8 @@
   function stopCurrent() {
     if (current && current.destroy) current.destroy();
     current = null;
+    RA.current = null;
+    RA.currentId = null;
   }
 
   function showMenu() {
@@ -47,8 +49,10 @@
     });
     stage.appendChild(U.el('div', { class: 'menu-head' },
       U.el('h1', { text: 'Raccoon Arcade 🦝' }),
-      U.el('p', { text: 'Scegli un gioco.' })));
+      U.el('p', { text: 'Scegli un gioco. Per tornare qui premi il tasto Esc o il pulsante Menu.' })));
     stage.appendChild(grid);
+    stage.appendChild(U.el('p', { class: 'menu-foot', text: '🦝 🐭 🐱 🐕  Buon divertimento!' }));
+    window.scrollTo(0, 0);
   }
 
   function openGame(id) {
@@ -57,8 +61,11 @@
     stage.className = 'play';
     homeBtn.hidden = false;
     const mod = M[id];
+    window.scrollTo(0, 0);
     try {
-      current = mod.mount(stage, {});
+      current = mod.mount(stage);
+      RA.current = current;
+      RA.currentId = id;
     } catch (err) {
       console.error(err);
       stage.appendChild(U.el('div', { class: 'card-box' },
@@ -73,9 +80,11 @@
     showMenu();
   });
 
+  // The button loses focus after a click, so the space bar in a game does not press it again.
   muteBtn.addEventListener('click', function () {
     RA.audio.setMuted(!RA.audio.isMuted());
     setMuteIcon();
+    muteBtn.blur();
   });
 
   // Escape returns to the menu from any game.

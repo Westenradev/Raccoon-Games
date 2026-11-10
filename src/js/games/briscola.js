@@ -1,4 +1,4 @@
-// Briscola (you vs Gatto CPU). One hand per game. 120 points in total. More than 60 wins.
+// Briscola for 2 players: you against the Chihuahua. 120 points in total. 61 or more wins.
 (function (name, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -12,33 +12,34 @@
   const HUMAN = 0;
   const CPU = 1;
 
-  // Points per card rank (1 = Asso, 3, 10 = Gatto Re, 9 = Chihuahua, 8 = Topo).
+  // Points per rank: Asso 11, Tre 10, Re 4, Cavallo 3, Fante 2.
   const POINTS = { 1: 11, 3: 10, 10: 4, 9: 3, 8: 2, 2: 0, 4: 0, 5: 0, 6: 0, 7: 0 };
-  // Strength order for taking a trick. Higher wins.
+  // Strength order inside a suit. Higher wins.
   const STRENGTH = { 1: 10, 3: 9, 10: 8, 9: 7, 8: 6, 7: 5, 6: 4, 5: 3, 4: 2, 2: 1 };
 
-  function newHand(rnd) {
+  // The last card of the deck is the briscola card. It is drawn last.
+  function newHand(rnd, leader) {
     const deck = U.shuffle(D.makeDeck(), rnd);
-    const trump = deck[deck.length - 1].suit;
+    const first = leader === CPU ? CPU : HUMAN;
+    const trump = deck[deck.length - 1];
+    const hands = [[], []];
+    hands[first] = deck.splice(0, 3);
+    hands[1 - first] = deck.splice(0, 3);
     return {
       deck: deck,
-      trumpSuit: trump,
-      hands: [deck.splice(0, 3), deck.splice(0, 3)],
-      table: [null, null],
-      leader: HUMAN,
+      trumpCard: trump,
+      trumpSuit: trump.suit,
+      hands: hands,
+      table: [null, null], // card played by HUMAN and by CPU in the current trick
+      leader: first,
+      turn: first,
       pile: [[], []],
-      turn: HUMAN,
       ended: false,
       lastTrick: null,
-      log: '',
     };
   }
 
-  function trumpCard(state) {
-    return state.deck[state.deck.length - 1] || null;
-  }
-
-  // Which of two played cards wins. first = leader's card.
+  // Which of two played cards wins: 0 = the first card (leader), 1 = the second.
   function trickWinner(a, b, trumpSuit) {
     const aT = a.suit === trumpSuit;
     const bT = b.suit === trumpSuit;
@@ -51,180 +52,216 @@
     return POINTS[c.rank] || 0;
   }
 
-  // Player plays a card. Returns { ok, reason, trick }.
+  // A player plays a card. Returns { ok, reason, trick }.
+  // trick is set when the play completes a trick: { winner, points, cards: [human, cpu] }.
   function play(state, player, cardId) {
     if (state.ended) return { ok: false, reason: 'hand over' };
     if (state.turn !== player) return { ok: false, reason: 'not your turn' };
     const hand = state.hands[player];
-    const idx = hand.findIndex((c) => c.id === cardId);
+    const idx = hand.findIndex(function (c) { return c.id === cardId; });
     if (idx < 0) return { ok: false, reason: 'card not in hand' };
     const card = hand.splice(idx, 1)[0];
-    const second = 1 - state.leader;
+    state.table[player] = card;
     if (player === state.leader) {
-      state.table[state.leader] = card;
-      state.turn = second;
-      state.log = (player === HUMAN ? 'Tu' : 'Gatto') + ' gioca ' + D.cardLabel(card) + ' ' + D.SUITS[card.suit].icon;
-      return { ok: true };
+      state.turn = 1 - player;
+      return { ok: true, trick: null };
     }
-    state.table[second] = card;
     const lead = state.table[state.leader];
-    const winnerSide = trickWinner(lead, card, state.trumpSuit) === 0 ? state.leader : second;
+    const winner = trickWinner(lead, card, state.trumpSuit) === 0 ? state.leader : player;
     const pts = cardPoints(lead) + cardPoints(card);
-    state.pile[winnerSide] = state.pile[winnerSide].concat([lead, card]);
-    state.lastTrick = { winner: winnerSide, points: pts, cards: [lead, card] };
+    state.pile[winner].push(lead, card);
+    state.lastTrick = { winner: winner, points: pts, cards: state.table.slice() };
     state.table = [null, null];
-    state.log = (winnerSide === HUMAN ? 'Prendi' : 'Il Gatto prende') + ' la mano: +' + pts;
-    // Winner draws first, then the other player.
-    const other = 1 - winnerSide;
-    if (state.deck.length > 0) state.hands[winnerSide].push(state.deck.shift());
-    if (state.deck.length > 0) state.hands[other].push(state.deck.shift());
-    state.leader = winnerSide;
-    state.turn = winnerSide;
+    // The winner draws first.
+    if (state.deck.length > 0) state.hands[winner].push(state.deck.shift());
+    if (state.deck.length > 0) state.hands[1 - winner].push(state.deck.shift());
+    state.leader = winner;
+    state.turn = winner;
     if (state.hands[0].length === 0 && state.hands[1].length === 0) state.ended = true;
     return { ok: true, trick: state.lastTrick };
   }
 
   function score(state) {
-    const pts = [0, 0];
-    state.pile.forEach((cards, i) => {
-      pts[i] = cards.reduce((s, c) => s + cardPoints(c), 0);
+    const pts = state.pile.map(function (cards) {
+      return cards.reduce(function (s, c) { return s + cardPoints(c); }, 0);
     });
-    // Last trick bonus is not used in this version.
     const winner = pts[0] > 60 ? HUMAN : pts[1] > 60 ? CPU : null;
-    return { points: pts, winner: winner, tie: pts[0] === 60 && pts[1] === 60 };
+    return { points: pts, winner: winner, tie: winner === null };
   }
 
-  // CPU picks a card.
+  // How much the CPU wants to keep a card. Low value cards are played first.
+  function keepValue(card, trump) {
+    return cardPoints(card) * 10 + (card.suit === trump ? 60 : 0) + STRENGTH[card.rank];
+  }
+
+  // CPU picks a card id.
   function cpuChoose(state, rnd) {
     const hand = state.hands[CPU];
     const trump = state.trumpSuit;
-    let choice = null;
     const lead = state.table[state.leader];
-    if (state.leader === CPU) {
-      // Leader: play the weakest card, keep high points for later. Sometimes play a trump ace.
-      choice = hand.reduce((a, b) => (valueOf(a, trump) <= valueOf(b, trump) ? a : b));
-    } else {
-      const winning = hand.filter((c) => trickWinner(lead, c, trump) === 1);
-      const pointsOnTable = cardPoints(lead);
-      if (winning.length && (pointsOnTable >= 2 || rnd() < 0.2)) {
-        choice = winning.reduce((a, b) => (valueOf(a, trump) <= valueOf(b, trump) ? a : b));
+    let best = null;
+    hand.forEach(function (c) {
+      let value;
+      if (state.leader === CPU || !lead) {
+        // Leading: give away as little as possible.
+        value = -keepValue(c, trump);
       } else {
-        choice = hand.reduce((a, b) => (valueOf(a, trump) <= valueOf(b, trump) ? a : b));
+        const total = cardPoints(lead) + cardPoints(c);
+        const trumpCost = c.suit === trump ? 5 + STRENGTH[c.rank] * 0.6 : 0;
+        if (trickWinner(lead, c, trump) === 1) value = total - trumpCost + 1;
+        else value = -total - trumpCost - STRENGTH[c.rank] * 0.05;
       }
-    }
-    return choice.id;
-  }
-
-  // Used for cpu choice: points first, then trump bonus, then strength.
-  function valueOf(card, trump) {
-    return cardPoints(card) * 10 + (card.suit === trump ? 100 : 0) + STRENGTH[card.rank];
+      value += rnd() * 0.01;
+      if (!best || value > best.value) best = { value: value, id: c.id };
+    });
+    return best.id;
   }
 
   // ---------- Browser interface ----------
-  function mount(container, ctx) {
+  function mount(container) {
     let alive = true;
-    let timer = null;
-    let rnd = U.makeRng();
+    const timers = [];
+    const rnd = U.makeRng();
     let hand = null;
     let wins = [0, 0];
+    let nextLeader = HUMAN;
     let busy = false;
+    let shown = null; // finished trick that stays on the table for a moment
+    let note = '';
     const root = U.el('div', { class: 'briscola game-panel' });
     container.appendChild(root);
 
-    function startHand() {
-      hand = newHand(rnd);
-      busy = false;
-      render();
-      nextCpu();
+    function later(fn, ms) {
+      timers.push(setTimeout(function () { if (alive) fn(); }, ms));
     }
 
-    function nextCpu() {
-      if (!alive || hand.ended || hand.turn !== CPU) return;
+    function startHand() {
+      hand = newHand(rnd, nextLeader);
+      nextLeader = 1 - nextLeader;
+      busy = false;
+      shown = null;
+      note = hand.turn === HUMAN ? 'Tocca a te. Gioca una carta.' : 'Inizia il Chihuahua.';
+      render();
+      proceed();
+    }
+
+    // Continues the hand after any play.
+    function proceed() {
+      if (hand.ended) return finish();
+      if (hand.turn !== CPU) {
+        busy = false;
+        return render();
+      }
       busy = true;
       render();
-      timer = setTimeout(function () {
-        if (!alive) return;
-        const id = cpuChoose(hand, rnd);
-        const r = play(hand, CPU, id);
+      later(function () {
+        const r = play(hand, CPU, cpuChoose(hand, rnd));
         if (A) A.sfx.place();
-        afterPlay(!!r.trick);
-      }, 750);
+        afterPlay(r);
+      }, 800);
     }
 
-    function afterPlay(trickDone) {
-      busy = false;
-      if (trickDone && A) hand.lastTrick.winner === HUMAN ? A.sfx.ok() : A.sfx.bad();
-      if (hand.ended) return finish();
+    function afterPlay(r) {
+      if (!r.trick) {
+        note = hand.turn === HUMAN ? 'Tocca a te. Rispondi alla carta del Chihuahua.' : 'Il Chihuahua sta pensando…';
+        return proceed();
+      }
+      // Leave both cards on the table for a moment, so the player sees who took the trick.
+      shown = r.trick;
+      busy = true;
+      const mine = r.trick.winner === HUMAN;
+      note = (mine ? 'Prendi tu' : 'Prende il Chihuahua') + ': ' + r.trick.points + ' punti.';
+      if (A) mine ? A.sfx.ok() : A.sfx.bad();
       render();
-      nextCpu();
+      later(function () {
+        shown = null;
+        note = hand.ended ? '' : (hand.turn === HUMAN ? 'Tocca a te. Gioca una carta.' : 'Gioca il Chihuahua.');
+        proceed();
+      }, 1500);
+    }
+
+    function clickCard(c) {
+      if (busy || hand.ended || hand.turn !== HUMAN) return;
+      const r = play(hand, HUMAN, c.id);
+      if (!r.ok) return;
+      if (A) A.sfx.place();
+      afterPlay(r);
     }
 
     function finish() {
       const s = score(hand);
-      const you = s.points[0];
-      const cpu = s.points[1];
-      const winner = s.winner;
-      if (winner === HUMAN) wins[0] += 1;
-      else if (winner === CPU) wins[1] += 1;
-      if (A) winner === HUMAN ? A.sfx.win() : A.sfx.lose();
+      if (s.winner === HUMAN) wins[0] += 1;
+      else if (s.winner === CPU) wins[1] += 1;
+      if (A) s.winner === HUMAN ? A.sfx.win() : A.sfx.lose();
+      busy = true;
+      note = '';
       render();
-      const overlay = U.el('div', { class: 'overlay' },
+      root.appendChild(U.el('div', { class: 'overlay' },
         U.el('div', { class: 'card-box' },
-          U.el('h2', { text: winner === HUMAN ? 'Hai vinto! 🦝' : winner === CPU ? 'Vince il Gatto 🐱' : 'Pareggio 60 - 60' }),
-          U.el('p', { text: 'Tu: ' + you + ' punti · Gatto: ' + cpu + ' punti' }),
-          U.el('p', { text: 'Vittorie: tu ' + wins[0] + ' · Gatto ' + wins[1] }),
-          U.el('button', { class: 'btn big', text: 'Nuova mano', onclick: function () { overlay.remove(); startHand(); } })));
-      root.appendChild(overlay);
+          U.el('h2', { text: s.winner === HUMAN ? 'Hai vinto! 🦝🏆' : s.winner === CPU ? 'Vince il Chihuahua 🐕' : 'Pareggio: 60 a 60' }),
+          U.el('p', { text: 'Tu: ' + s.points[0] + ' punti · Chihuahua: ' + s.points[1] + ' punti' }),
+          U.el('p', { text: 'Partite vinte: tu ' + wins[0] + ' · Chihuahua ' + wins[1] }),
+          U.el('button', { class: 'btn big', text: 'Nuova partita', onclick: startHand }))));
     }
 
     function render() {
       if (!alive) return;
-      root.querySelectorAll('.overlay').forEach((o) => o.remove());
       root.innerHTML = '';
-      const trump = trumpCard(hand);
-      const top = U.el('div', { class: 'scopa-top' },
-        U.el('div', { class: 'score', text: 'Tu ' + wins[0] + ' · Gatto ' + wins[1] + ' (vittorie)' }),
-        U.el('div', { class: 'score', text: 'Mazzo: ' + hand.deck.length }));
-      const trumpRow = U.el('div', { class: 'trump-row' },
-        U.el('span', { text: 'Briscola:' }),
-        D.cardEl(trump, { small: true }),
-        U.el('span', { class: 'trump-suit', text: D.SUITS[hand.trumpSuit].icon + ' ' + D.SUITS[hand.trumpSuit].name }));
-      const cpuRow = U.el('div', { class: 'hand cpu' });
-      hand.hands[CPU].forEach(() => cpuRow.appendChild(D.cardEl(null, { hidden: true, small: true })));
-      const tableRow = U.el('div', { class: 'table trick' });
-      const slots = [hand.table[CPU], hand.table[HUMAN]];
-      slots.forEach((c, i) => {
-        tableRow.appendChild(U.el('div', { class: 'slot' + (c ? '' : ' empty') }, c ? D.cardEl(c, { small: false }) : U.el('span', { text: i === CPU ? 'Gatto' : 'Tu' })));
+      const pts = score(hand).points;
+      root.appendChild(U.el('div', { class: 'pill-row' },
+        U.el('div', { class: 'pill', text: 'Punti: tu ' + pts[0] + ' · Chihuahua ' + pts[1] }),
+        U.el('div', { class: 'pill', text: 'Partite: ' + wins[0] + ' - ' + wins[1] }),
+        U.el('div', { class: 'pill', text: 'Mazzo: ' + hand.deck.length })));
+
+      const trumpInfo = U.el('div', { class: 'trump-row' }, U.el('span', { text: 'Briscola:' }));
+      if (hand.deck.length) trumpInfo.appendChild(D.cardEl(hand.trumpCard, { small: true, disabled: true }));
+      const suitBadge = U.el('span', { class: 'trump-suit' });
+      suitBadge.innerHTML = D.suitSvg(hand.trumpSuit, 'inline');
+      suitBadge.appendChild(document.createTextNode(' ' + D.SUITS[hand.trumpSuit].name));
+      trumpInfo.appendChild(suitBadge);
+      root.appendChild(trumpInfo);
+
+      const cpuRow = U.el('div', { class: 'hand cpu' }, U.el('span', { class: 'seat', text: '🐕 Chihuahua' }));
+      hand.hands[CPU].forEach(function () { cpuRow.appendChild(D.cardEl(null, { hidden: true, small: true })); });
+      root.appendChild(cpuRow);
+
+      const cards = shown ? shown.cards : hand.table;
+      const felt = U.el('div', { class: 'felt trick' });
+      [CPU, HUMAN].forEach(function (who) {
+        const c = cards[who];
+        const slot = U.el('div', { class: 'slot' + (c ? '' : ' empty') + (shown && shown.winner === who ? ' winner' : '') });
+        slot.appendChild(U.el('div', { class: 'slot-name', text: who === CPU ? 'Chihuahua' : 'Tu' }));
+        if (c) slot.appendChild(D.cardEl(c, { disabled: true }));
+        felt.appendChild(slot);
       });
-      const handRow = U.el('div', { class: 'hand me' });
+      root.appendChild(felt);
+      root.appendChild(U.el('div', { class: 'msg', text: note }));
+
       const myTurn = !busy && hand.turn === HUMAN && !hand.ended;
-      hand.hands[HUMAN].forEach((c) => {
-        handRow.appendChild(D.cardEl(c, {
-          onclick: myTurn ? function () {
-            const r = play(hand, HUMAN, c.id);
-            if (!r.ok) return;
-            if (A) A.sfx.place();
-            afterPlay(!!r.trick);
-          } : null,
-          disabled: !myTurn,
-        }));
+      const handRow = U.el('div', { class: 'hand me' });
+      hand.hands[HUMAN].forEach(function (c) {
+        handRow.appendChild(D.cardEl(c, { disabled: !myTurn, onclick: function () { clickCard(c); } }));
       });
-      const msg = U.el('div', { class: 'msg', text: busy ? 'Il Gatto sta pensando...' : (hand.log || 'Gioca una carta. Vince la carta più forte.') });
-      root.append(top, trumpRow, cpuRow, tableRow, msg, handRow);
-      root.appendChild(U.el('div', { class: 'hint', text: 'Punti: Asso 11 · Tre 10 · Gatto Re 4 · Chihuahua 3 · Topo 2' }));
+      root.appendChild(handRow);
+      root.appendChild(U.el('div', { class: 'hint', text: 'Valore: Asso 11 · Tre 10 · Re 4 · Cavallo 3 · Fante 2. La briscola batte gli altri semi.' }));
     }
 
     startHand();
     return {
       destroy: function () {
         alive = false;
-        if (timer) clearTimeout(timer);
+        timers.forEach(clearTimeout);
+      },
+      debug: {
+        get state() { return hand; },
+        get busy() { return busy; },
+        get wins() { return wins; },
       },
     };
   }
 
   return {
-    meta: { id: 'briscola', title: 'Briscola', icon: '🂡', desc: 'Briscola contro il Gatto. Più di 60 punti vince.' },
+    meta: { id: 'briscola', title: 'Briscola', icon: '🃏', desc: 'Briscola contro il Chihuahua. Vince chi fa almeno 61 punti.' },
     mount: mount,
     newHand: newHand,
     play: play,
