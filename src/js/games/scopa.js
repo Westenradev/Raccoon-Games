@@ -396,6 +396,5 @@
     WIN_SCORE: WIN_SCORE,
     HUMAN: HUMAN,
     CPU: CPU,
-    mount: null, // set below when running in browser
   };
 });
