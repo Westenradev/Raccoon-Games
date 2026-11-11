@@ -34,7 +34,8 @@
       "target": [
         "dmg",
         "zip"
-      ]
+      ],
+      "icon": "build/icon.png"
     },
     "artifactName": "RaccoonArcade-${version}-${os}-${arch}.${ext}",
     "linux": {
@@ -43,7 +44,29 @@
         "AppImage",
         "tar.gz"
       ],
-      "synopsis": "Undici giochi da tavolo e da sala giochi"
+      "synopsis": "Undici giochi da tavolo e da sala giochi",
+      "icon": "build/icon.png"
+    },
+    "afterPack": "build/adhoc-sign.js",
+    "dmg": {
+      "title": "Raccoon Arcade",
+      "contents": [
+        {
+          "x": 150,
+          "y": 200,
+          "type": "file"
+        },
+        {
+          "x": 420,
+          "y": 200,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 570,
+        "height": 380
+      }
     }
   },
   "author": "Raccoon Arcade"

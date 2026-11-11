@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <radialGradient id="felt" cx="50%" cy="38%" r="75%">
+      <stop offset="0" stop-color="#1a8d57"/>
+      <stop offset="1" stop-color="#0a4a2b"/>
+    </radialGradient>
+    <linearGradient id="cardface" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fffaf0"/>
+      <stop offset="1" stop-color="#f1e6cb"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+    <clipPath id="tongue"><path d="M-62 108 Q0 112 62 108 Q50 176 0 178 Q-50 176 -62 108Z"/></clipPath>
+  </defs>
+  <!-- Mac icon base: rounded square with a green card-table cloth -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#felt)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="none" stroke="#06331d" stroke-width="6" opacity="0.6"/>
+  <!-- The card -->
+  <g transform="translate(512 520) rotate(-5)">
+    <rect x="-262" y="-352" width="524" height="704" rx="44" fill="url(#cardface)" stroke="#2b2118" stroke-width="8" filter="url(#shadow)"/>
+    <rect x="-232" y="-322" width="464" height="644" rx="22" fill="none" stroke="#b8892f" stroke-width="7"/>
+    <rect x="-216" y="-306" width="432" height="612" rx="14" fill="none" stroke="#b8892f" stroke-width="2.5"/>
+    <!-- corner marks (coin suit of the Piacentine deck) -->
+    <g fill="#c9a24a" stroke="#8a6416" stroke-width="3">
+      <circle cx="-172" cy="-262" r="22"/><circle cx="172" cy="262" r="22"/>
+    </g>
+    <g fill="none" stroke="#8a6416" stroke-width="3">
+      <circle cx="-172" cy="-262" r="11"/><circle cx="172" cy="262" r="11"/>
+    </g>
+    <!-- The raccoon -->
+    <g transform="translate(0 -6) scale(0.86)">
+      <!-- ears -->
+      <circle cx="-168" cy="-178" r="78" fill="#6c727b"/><circle cx="168" cy="-178" r="78" fill="#6c727b"/>
+      <circle cx="-168" cy="-172" r="40" fill="#2a2a30"/><circle cx="168" cy="-172" r="40" fill="#2a2a30"/>
+      <circle cx="-168" cy="-168" r="22" fill="#e9a8a4" opacity="0.7"/><circle cx="168" cy="-168" r="22" fill="#e9a8a4" opacity="0.7"/>
+      <!-- head -->
+      <ellipse cx="0" cy="0" rx="250" ry="205" fill="#9096a0"/>
+      <!-- cheek tufts -->
+      <path d="M-250 40 L-292 78 L-236 92Z" fill="#9096a0"/><path d="M250 40 L292 78 L236 92Z" fill="#9096a0"/>
+      <!-- forehead stripe -->
+      <path d="M0 -196 C-34 -150 -40 -90 -26 -30 L26 -30 C40 -90 34 -150 0 -196Z" fill="#eceae6"/>
+      <!-- mask -->
+      <path d="M-228 -26 C-210 -92 -120 -86 -62 -52 C-30 -62 30 -62 62 -52 C120 -86 210 -92 228 -26 C216 36 140 62 74 46 C30 36 -30 36 -74 46 C-140 62 -216 36 -228 -26Z" fill="#26262c"/>
+      <!-- eyes -->
+      <ellipse cx="-104" cy="-8" rx="36" ry="40" fill="#fff"/><ellipse cx="104" cy="-8" rx="36" ry="40" fill="#fff"/>
+      <circle cx="-98" cy="-4" r="22" fill="#15151a"/><circle cx="98" cy="-4" r="22" fill="#15151a"/>
+      <circle cx="-90" cy="-13" r="8" fill="#fff"/><circle cx="106" cy="-13" r="8" fill="#fff"/>
+      <!-- muzzle -->
+      <ellipse cx="0" cy="104" rx="132" ry="98" fill="#f6f3ec"/>
+      <!-- cheeks -->
+      <circle cx="-150" cy="96" r="26" fill="#f0a4a0" opacity="0.55"/><circle cx="150" cy="96" r="26" fill="#f0a4a0" opacity="0.55"/>
+      <!-- nose -->
+      <path d="M-40 48 Q0 32 40 48 Q34 88 0 96 Q-34 88 -40 48Z" fill="#1d1d22"/>
+      <ellipse cx="-12" cy="55" rx="14" ry="6" fill="#fff" opacity="0.4"/>
+      <!-- smile -->
+      <path d="M0 96 L0 112" stroke="#1d1d22" stroke-width="9" stroke-linecap="round" fill="none"/>
+      <path d="M-62 108 Q0 112 62 108 Q50 176 0 178 Q-50 176 -62 108Z" fill="#3b1c1c"/>
+      <g clip-path="url(#tongue)"><ellipse cx="0" cy="176" rx="34" ry="24" fill="#e9707a"/></g>
+      <path d="M-62 108 Q0 112 62 108" stroke="#1d1d22" stroke-width="8" stroke-linecap="round" fill="none"/>
+      <path d="M-62 108 Q-72 100 -78 88 M62 108 Q72 100 78 88" stroke="#1d1d22" stroke-width="8" stroke-linecap="round" fill="none"/>
+    </g>
+  </g>
+</svg>

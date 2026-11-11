@@ -21,6 +21,10 @@ jobs:
         run: npm test
       - name: Build the Apple Silicon app (.dmg and .zip)
         run: npm run build:mac
+      - name: Check the signature of the Mac app
+        run: |
+          codesign --verify --deep --strict --verbose=2 "dist/mac-arm64/Raccoon Arcade.app"
+          codesign -dv "dist/mac-arm64/Raccoon Arcade.app" 2>&1 | grep -E "Signature|Identifier"
       - name: Upload the Mac files
         uses: actions/upload-artifact@v4
         with:

@@ -9,6 +9,7 @@ function createWindow() {
     minWidth: 480,
     minHeight: 560,
     title: 'Raccoon Arcade',
+    icon: path.join(__dirname, 'src', 'assets', 'icon.png'),
     backgroundColor: '#14102a',
     autoHideMenuBar: true,
     webPreferences: {

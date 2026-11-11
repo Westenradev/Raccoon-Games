@@ -33,10 +33,20 @@ I file pronti si scaricano dalla pagina **Actions** del repository su GitHub. Ap
 
 ### Mac con Apple Silicon (M1, M2, M3, M4)
 
-1. Scarica **RaccoonArcade-mac-arm64** e scompattalo.
-2. Se trovi un file `.dmg`, aprilo e trascina **Raccoon Arcade** nella cartella **Applicazioni**.
-3. Se trovi un file `.zip`, scompattalo e sposta **Raccoon Arcade** nella cartella **Applicazioni**.
-4. L'app non è firmata da Apple. Il Mac può dire che è "danneggiata". In quel caso apri il Terminale e scrivi questi due comandi:
+Il file giusto è il `.dmg` creato da GitHub (pacchetto **RaccoonArcade-mac-arm64**). Viene costruito e firmato su un Mac vero.
+
+1. Apri il file `.dmg`.
+2. Trascina **Raccoon Arcade** nella cartella **Applicazioni**.
+3. Apri **Raccoon Arcade**. La prima volta il Mac può dire che non può controllare l'app. Questo succede perché l'app non ha la firma a pagamento di Apple. Per aprirla senza usare il Terminale:
+   - **macOS 14 e precedenti:** fai clic con il tasto destro su **Raccoon Arcade**, scegli **Apri** e conferma con **Apri**.
+   - **macOS 15 e successivi:** apri **Impostazioni di Sistema**, poi **Privacy e sicurezza**. In basso premi **Apri comunque** vicino a "Raccoon Arcade". Scrivi la password del Mac e conferma.
+4. Dalla seconda volta l'app si apre con un doppio clic.
+
+Il passaggio 3 si fa una volta sola. Se il Mac è di una persona che non usa bene il computer, conviene farlo al suo posto la prima volta.
+
+Se il file arriva da una chiavetta USB o da iCloud Drive e non da internet, il Mac non fa nemmeno questa domanda.
+
+Se il Mac dice che l'app è "danneggiata", il file non è stato firmato (per esempio un `.zip` creato su Linux). Apri il Terminale e scrivi questi due comandi:
 
 ```bash
 xattr -cr "/Applications/Raccoon Arcade.app"
@@ -45,10 +55,6 @@ xattr -cr "/Applications/Raccoon Arcade.app"
 ```bash
 codesign --force --deep --sign - "/Applications/Raccoon Arcade.app"
 ```
-
-5. Apri l'app. Se compare ancora un avviso, fai clic con il tasto destro su **Raccoon Arcade**, scegli **Apri** e conferma con **Apri**.
-
-Il file `.zip` creato su Linux non ha la firma locale. Per questo i comandi del passaggio 4 servono quasi sempre. Il file `.dmg` creato su un Mac può non averne bisogno.
 
 ### Linux (64 bit)
 
@@ -138,7 +144,8 @@ I file finali finiscono nella cartella `dist/`.
 
 - `main.js`: finestra Electron.
 - `src/index.html`, `src/css/style.css`: pagina e stile.
-- `src/assets/`: carte piacentine e caratteri.
+- `src/assets/`: carte piacentine, caratteri e icona.
+- `build/`: icona (`icon.svg` è l'originale) e firma automatica per Mac.
 - `src/js/core/`: utilità, audio, partite salvate, base per i giochi a canvas.
 - `src/js/games/`: un file per gioco, con regole e interfaccia.
 - `tests/`: test automatici delle regole. `tests/e2e/`: prove nel browser.
