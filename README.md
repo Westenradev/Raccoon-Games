@@ -1,6 +1,34 @@
 # Raccoon Arcade
 
-Raccoon Arcade è una raccolta di undici giochi per Mac con processore Apple Silicon (M1, M2, M3, M4) e per Linux a 64 bit.
+<p align="center">
+  <img src="build/icon.png" alt="Raccoon Arcade" width="140">
+</p>
+
+<h1 align="center">Raccoon Arcade</h1>
+
+<p align="center">
+  Undici giochi per Mac (Apple Silicon) e Linux: carte piacentine, giochi da tavolo e sala giochi.<br>
+  <em>Eleven classic games for Mac (Apple Silicon) and Linux: Italian card games, board games and arcade.</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/menu.jpg" alt="Il menu di Raccoon Arcade" width="720">
+</p>
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/scopa.jpg" alt="Scopa"></td>
+    <td><img src="docs/screenshots/mahjong.jpg" alt="Mahjong"></td>
+    <td><img src="docs/screenshots/dama.jpg" alt="Dama"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/sudoku.jpg" alt="Sudoku"></td>
+    <td><img src="docs/screenshots/snake.jpg" alt="Snake"></td>
+    <td><img src="docs/screenshots/invaders.jpg" alt="Raccoon Defender"></td>
+  </tr>
+</table>
+
+Raccoon Arcade è una raccolta di undici giochi per Mac con processore Apple Silicon (M1, M2, M3, M4) e per Linux a 64 bit. Non serve internet e non raccoglie nessun dato. Le partite si salvano da sole sul computer.
 
 ## Giochi
 

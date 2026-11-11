@@ -20,7 +20,7 @@
     "electron-builder": "^25.1.8"
   },
   "build": {
-    "appId": "com.westenradev.raccoonarcade",
+    "appId": "com.raccoonarcade.app",
     "productName": "Raccoon Arcade",
     "directories": {
       "output": "dist"
