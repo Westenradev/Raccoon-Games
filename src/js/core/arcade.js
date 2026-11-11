@@ -119,9 +119,12 @@
     };
     const onBlur = function () { if (active()) paused = true; };
     const onHide = function () { if (document.hidden) onBlur(); };
+    // A click on the game also ends the pause, for players who use only the mouse.
+    const onClick = function () { paused = false; };
     window.addEventListener('keydown', onKey);
     window.addEventListener('blur', onBlur);
     document.addEventListener('visibilitychange', onHide);
+    if (o.view) o.view.canvas.addEventListener('click', onClick);
     const frame = function (t) {
       if (!running) return;
       if (last === null) last = t;
@@ -144,7 +147,8 @@
         g.fillStyle = 'rgba(0,0,0,0.74)';
         g.fillRect(0, 0, o.view.w, o.view.h);
         pixelText(g, 'PAUSA', o.view.w / 2, o.view.h / 2 - 18, 26, '#ffe600');
-        pixelText(g, 'Premi P per continuare', o.view.w / 2, o.view.h / 2 + 22, 11, '#fff');
+        pixelText(g, 'Premi P o fai clic', o.view.w / 2, o.view.h / 2 + 22, 11, '#fff');
+        pixelText(g, 'per continuare', o.view.w / 2, o.view.h / 2 + 44, 11, '#fff');
       }
       raf = requestAnimationFrame(frame);
     };
@@ -156,6 +160,7 @@
         window.removeEventListener('keydown', onKey);
         window.removeEventListener('blur', onBlur);
         document.removeEventListener('visibilitychange', onHide);
+        if (o.view) o.view.canvas.removeEventListener('click', onClick);
         if (o.view && o.view.release) o.view.release();
       },
       isPaused: function () { return paused; },

@@ -448,3 +448,20 @@ test('bubbles: an aiming bot clears level 1', () => {
   }
   assert.ok(wins >= 4, 'bot cleared level 1 in ' + wins + '/6 games');
 });
+
+test('pacman: a chaser that was caught cannot be caught again before the next big dot', () => {
+  const s = P.newGame(5, 1);
+  s.freeze = 0;
+  s.scared = 7;
+  // Stand on the home tile, where caught chasers come back.
+  s.pac.x = s.house.x; s.pac.y = s.house.y; s.pac.moving = false; s.pac.want = null;
+  s.ghosts.forEach((g) => { g.wait = 0; });
+  const start = s.score;
+  let catches = 0;
+  for (let t = 0; t < 60 * 7 && !s.over; t++) {
+    P.update(s, DT, null);
+    if (s.events.includes('ghost')) catches++;
+  }
+  assert.ok(catches <= s.ghosts.length, 'each chaser at most once: ' + catches);
+  assert.ok(s.score - start <= 200 + 400 + 800 + 1600, 'points from chasers: ' + (s.score - start));
+});

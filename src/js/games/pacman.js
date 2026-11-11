@@ -202,8 +202,14 @@
 
   function ghostSpeed(state, g) {
     if (g.eaten) return 11;
-    if (state.scared > 0) return 3.2;
+    if (isAfraid(state, g)) return 3.2;
     return Math.min(pacSpeed(state) - 0.5, 3.7 + state.level * 0.35);
+  }
+
+  // A chaser is afraid while the big dot works. One that was caught and came back is not
+  // afraid again until the next big dot, so it cannot be caught over and over.
+  function isAfraid(state, g) {
+    return state.scared > 0 && !g.eaten && !g.brave;
   }
 
   function isHunting(state) {
@@ -231,7 +237,7 @@
     const ahead = open.filter(function (d) { return d !== OPP[g.dir]; });
     const opts = ahead.length ? ahead : open;
     const random = opts[Math.floor(state.rnd() * opts.length)];
-    if (state.scared > 0 || !isHunting(state)) return random;
+    if (isAfraid(state, g) || !isHunting(state)) return random;
     const smart = Math.min(0.95, CHASERS[g.id].smart + (state.level - 1) * 0.05);
     if (state.rnd() >= smart) return random;
     if (!state.pacDist) state.pacDist = distanceMap(state.grid, state.pac.x, state.pac.y);
@@ -289,7 +295,10 @@
       state.scared = POWER_TIME;
       state.eatChain = 0;
       state.events.push('power');
-      state.ghosts.forEach(function (g) { if (!g.eaten) reverse(g); });
+      state.ghosts.forEach(function (g) {
+        g.brave = false;
+        if (!g.eaten) reverse(g);
+      });
     }
     if (state.acornsLeft === 0) {
       state.won = true;
@@ -331,6 +340,7 @@
       advance(g, ghostSpeed(state, g) * dt, function () { return ghostChoice(state, g); }, function () {
         if (g.eaten && g.x === state.house.x && g.y === state.house.y) {
           g.eaten = false;
+          g.brave = true;
           g.wait = 1.5;
           return false;
         }
@@ -347,8 +357,9 @@
       let dx = Math.abs(gp.x - pp.x);
       if (dx > W / 2) dx = W - dx;
       if (dx + Math.abs(gp.y - pp.y) > 0.7) continue;
-      if (state.scared > 0) {
-        state.eatChain += 1;
+      if (isAfraid(state, g)) {
+        // 200, 400, 800, 1600 points, as in the arcade.
+        state.eatChain = Math.min(4, state.eatChain + 1);
         state.score += 200 * Math.pow(2, state.eatChain - 1);
         g.eaten = true;
         state.events.push('ghost');
@@ -475,7 +486,7 @@
       const pos = px(positionOf(gh));
       let mode = 'chase';
       if (gh.eaten) mode = 'eyes';
-      else if (state.scared > 0) mode = state.scared < 2 && Math.floor(clock * 6) % 2 === 0 ? 'flash' : 'scared';
+      else if (isAfraid(state, gh)) mode = state.scared < 2 && Math.floor(clock * 6) % 2 === 0 ? 'flash' : 'scared';
       paintGhost(g, pos.x, pos.y, gh.color, gh.dir, mode, clock);
       if (pos.x < TILE / 2) paintGhost(g, pos.x + VIEW_W, pos.y, gh.color, gh.dir, mode, clock);
       if (pos.x > VIEW_W - TILE / 2) paintGhost(g, pos.x - VIEW_W, pos.y, gh.color, gh.dir, mode, clock);

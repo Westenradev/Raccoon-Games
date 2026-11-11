@@ -198,7 +198,7 @@
 
     const KEY_DIR = { arrowup: 'up', w: 'up', arrowdown: 'down', s: 'down', arrowleft: 'left', a: 'left', arrowright: 'right', d: 'right' };
     const unbind = AR.bindKeys(function (k, down) {
-      if (down && KEY_DIR[k] && started) turn(state, KEY_DIR[k]);
+      if (down && KEY_DIR[k] && started && !loop.isPaused()) turn(state, KEY_DIR[k]);
     });
     const loop = AR.startLoop(frame, draw, { view: view, active: function () { return started && state.alive; } });
     AR.help(wrap, 'Usa le quattro frecce per girare. P: pausa.');

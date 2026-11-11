@@ -456,7 +456,7 @@
     }
 
     function shoot() {
-      if (started && fire(state) && A) A.sfx.shoot();
+      if (started && !loop.isPaused() && fire(state) && A) A.sfx.shoot();
     }
 
     function aimFromEvent(e) {

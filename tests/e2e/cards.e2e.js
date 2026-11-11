@@ -1524,8 +1524,13 @@ async function solPreparedTests() {
   const low = await colSteps();
   const eventsBefore = await page.evaluate(() => window.__e2eResizes);
   await page.setViewportSize({ width: 1120, height: 812 });
-  await tick(200);
-  const resizeEvents = (await page.evaluate(() => window.__e2eResizes)) - eventsBefore;
+  // The browser delivers the resize event in real time, whatever the page clock says.
+  let resizeEvents = 0;
+  for (let i = 0; i < 60 && !resizeEvents; i++) {
+    await new Promise((r) => setTimeout(r, 50));
+    resizeEvents = (await page.evaluate(() => window.__e2eResizes)) - eventsBefore;
+  }
+  await tick(100);
   const resized = await colSteps();
   s = await solLoad(longState());
   const freshLayout = await colSteps();
