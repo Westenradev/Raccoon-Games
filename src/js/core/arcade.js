@@ -15,30 +15,45 @@
   // Retina screens, and CSS scales the canvas to fill the window height.
   function createCanvas(container, w, h, extraClass) {
     const canvas = document.createElement('canvas');
-    const scale = Math.max(2, Math.ceil(window.devicePixelRatio || 1));
-    canvas.width = w * scale;
-    canvas.height = h * scale;
     canvas.className = 'arcade-canvas ' + (extraClass || '');
     container.style.width = 'min(100%, calc((100vh - 150px) * ' + (w / h).toFixed(4) + '))';
     canvas.style.aspectRatio = w + ' / ' + h;
     const ctx = canvas.getContext('2d');
-    ctx.setTransform(scale, 0, 0, scale, 0, 0);
     container.appendChild(canvas);
-    return { canvas: canvas, ctx: ctx, w: w, h: h };
+    // One backing pixel for each screen pixel (or more), also after the window changes size.
+    const fit = function () {
+      const shown = canvas.getBoundingClientRect().width || w;
+      const scale = Math.min(5, Math.max(2, Math.ceil((shown * (window.devicePixelRatio || 1)) / w)));
+      if (canvas.width !== w * scale) {
+        canvas.width = w * scale;
+        canvas.height = h * scale;
+      }
+      ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    };
+    fit();
+    window.addEventListener('resize', fit);
+    return { canvas: canvas, ctx: ctx, w: w, h: h, release: function () { window.removeEventListener('resize', fit); } };
   }
 
   // Keyboard state. Keys are lower-case names like 'arrowleft', ' ', 'a'.
   const down = {};
+  const tapped = {}; // keys pressed since the last read, so a very short tap still counts
   const listeners = [];
   function releaseAll() {
     Object.keys(down).forEach(function (k) { down[k] = false; });
+    Object.keys(tapped).forEach(function (k) { tapped[k] = false; });
   }
   function onKeyDown(e) {
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) {
+      // With Cmd held, macOS sends no key-up for other keys: drop them all, so none stays stuck.
+      releaseAll();
+      return;
+    }
     const k = e.key.toLowerCase();
     if (GAME_KEYS.indexOf(k) >= 0) e.preventDefault();
     if (down[k]) return; // ignore keyboard auto-repeat
     down[k] = true;
+    tapped[k] = true;
     listeners.slice().forEach(function (fn) { fn(k, true); });
   }
   function onKeyUp(e) {
@@ -71,33 +86,64 @@
   }
   // Left/right/up/down/fire from arrows, WASD, or Space.
   function dirInput() {
+    const on = function (k) {
+      const v = !!down[k] || !!tapped[k];
+      tapped[k] = false;
+      return v;
+    };
     return {
-      left: isDown('arrowleft') || isDown('a'),
-      right: isDown('arrowright') || isDown('d'),
-      up: isDown('arrowup') || isDown('w'),
-      down: isDown('arrowdown') || isDown('s'),
-      fire: isDown(' '),
+      left: on('arrowleft') || on('a'),
+      right: on('arrowright') || on('d'),
+      up: on('arrowup') || on('w'),
+      down: on('arrowdown') || on('s'),
+      fire: on(' '),
     };
   }
 
   // Fixed-step game loop. step(dt) is called in STEP chunks. draw() after each frame.
-  function startLoop(step, draw) {
+  // opts: { view, active }. With them the loop also handles the pause: the P key stops and
+  // restarts a game in progress, and the game stops by itself when the window loses focus.
+  // active() tells if a game is in progress (not on a start or game-over card).
+  function startLoop(step, draw, opts) {
+    const o = opts || {};
+    const active = o.active || function () { return false; };
     let running = true;
+    let paused = false;
     let raf = 0;
     let last = null;
     let acc = 0;
+    const onKey = function (e) {
+      if ((e.key === 'p' || e.key === 'P') && !e.repeat && !e.metaKey && !e.ctrlKey && active()) paused = !paused;
+    };
+    const onBlur = function () { if (active()) paused = true; };
+    const onHide = function () { if (document.hidden) onBlur(); };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('blur', onBlur);
+    document.addEventListener('visibilitychange', onHide);
     const frame = function (t) {
       if (!running) return;
       if (last === null) last = t;
       acc += Math.min(0.1, (t - last) / 1000);
       last = t;
-      let guard = 0;
-      while (acc >= STEP && guard++ < 8) {
-        step(STEP);
-        acc -= STEP;
+      if (!active()) paused = false;
+      if (paused) {
+        acc = 0;
+      } else {
+        let guard = 0;
+        while (acc >= STEP && guard++ < 8) {
+          step(STEP);
+          acc -= STEP;
+        }
+        if (guard >= 8) acc = 0;
       }
-      if (guard >= 8) acc = 0;
       draw();
+      if (paused && o.view) {
+        const g = o.view.ctx;
+        g.fillStyle = 'rgba(0,0,0,0.74)';
+        g.fillRect(0, 0, o.view.w, o.view.h);
+        pixelText(g, 'PAUSA', o.view.w / 2, o.view.h / 2 - 18, 26, '#ffe600');
+        pixelText(g, 'Premi P per continuare', o.view.w / 2, o.view.h / 2 + 22, 11, '#fff');
+      }
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
@@ -105,6 +151,27 @@
       stop: function () {
         running = false;
         cancelAnimationFrame(raf);
+        window.removeEventListener('keydown', onKey);
+        window.removeEventListener('blur', onBlur);
+        document.removeEventListener('visibilitychange', onHide);
+        if (o.view && o.view.release) o.view.release();
+      },
+      isPaused: function () { return paused; },
+    };
+  }
+
+  // Record (best score) of a game. It is saved as soon as it is beaten, so leaving a game
+  // in the middle does not lose it.
+  function record(id) {
+    let best = U.store.get('hi.' + id, 0);
+    return {
+      get: function () { return best; },
+      submit: function (score) {
+        if (score > best) {
+          best = score;
+          U.store.set('hi.' + id, best);
+        }
+        return best;
       },
     };
   }
@@ -210,6 +277,7 @@
     sprite: sprite,
     thumb: thumb,
     help: help,
+    record: record,
     overlay: overlay,
   };
 });

@@ -343,7 +343,10 @@
     for (const g of state.ghosts) {
       if (g.eaten) continue;
       const gp = positionOf(g);
-      if (Math.abs(gp.x - pp.x) + Math.abs(gp.y - pp.y) > 0.7) continue;
+      // In the tunnel the two ends of the row touch, so the distance wraps around.
+      let dx = Math.abs(gp.x - pp.x);
+      if (dx > W / 2) dx = W - dx;
+      if (dx + Math.abs(gp.y - pp.y) > 0.7) continue;
       if (state.scared > 0) {
         state.eatChain += 1;
         state.score += 200 * Math.pow(2, state.eatChain - 1);
@@ -474,15 +477,25 @@
       if (gh.eaten) mode = 'eyes';
       else if (state.scared > 0) mode = state.scared < 2 && Math.floor(clock * 6) % 2 === 0 ? 'flash' : 'scared';
       paintGhost(g, pos.x, pos.y, gh.color, gh.dir, mode, clock);
+      if (pos.x < TILE / 2) paintGhost(g, pos.x + VIEW_W, pos.y, gh.color, gh.dir, mode, clock);
+      if (pos.x > VIEW_W - TILE / 2) paintGhost(g, pos.x - VIEW_W, pos.y, gh.color, gh.dir, mode, clock);
     });
     if (!state.over || state.won) {
       const pp = px(positionOf(state.pac));
       const open = state.pac.moving ? 0.08 + Math.abs(Math.sin(clock * 14)) * 0.6 : 0.35;
       paintPac(g, pp.x, pp.y, state.pac.dir, open);
+      if (pp.x < TILE / 2) paintPac(g, pp.x + VIEW_W, pp.y, state.pac.dir, open);
+      if (pp.x > VIEW_W - TILE / 2) paintPac(g, pp.x - VIEW_W, pp.y, state.pac.dir, open);
     }
-    if (ready) AR.pixelText(g, 'PRONTI!', VIEW_W / 2, HUD + (state.house.y + 3) * TILE + TILE / 2, 16, '#ffee00');
+    if (ready) {
+      const ry = HUD + (state.house.y + 3) * TILE + TILE / 2;
+      g.fillStyle = '#000';
+      g.fillRect(VIEW_W / 2 - 78, ry - 15, 156, 30);
+      AR.pixelText(g, 'PRONTI!', VIEW_W / 2, ry, 16, '#ffee00');
+    }
     AR.pixelText(g, 'PUNTI ' + state.score, 10, HUD / 2, 12, '#fff', 'left');
-    AR.pixelText(g, 'LIVELLO ' + state.level, VIEW_W / 2, HUD / 2, 12, '#ffb852');
+    AR.pixelText(g, 'RECORD ' + Math.max(hi, state.score), VIEW_W / 2 - 30, HUD / 2, 12, '#ff4a30');
+    AR.pixelText(g, 'LIV.' + state.level, VIEW_W - 104, HUD / 2, 12, '#ffb852', 'right');
     for (let i = 0; i < state.lives; i++) paintPac(g, VIEW_W - 22 - i * 30, HUD / 2, 'left', 0.5);
   }
 
@@ -504,20 +517,26 @@
     container.appendChild(wrap);
     const view = AR.createCanvas(wrap, VIEW_W, VIEW_H, 'pacman');
     const g = view.ctx;
-    let hi = U.store.get('hi.pacman', 0);
+    const best = AR.record('pacman');
     let seedBase = Math.floor(Math.random() * 1e6);
     let state = newGame(seedBase, 1);
     let started = false;
     let clock = 0;
 
     function draw() {
-      paint(g, state, hi, clock, started && state.freeze > 0 && !state.over);
+      paint(g, state, best.get(), clock, started && state.freeze > 0 && !state.over);
     }
 
     function frame(dt) {
       clock += dt;
       if (!started || state.over) return;
+      // A key that is still held after a restart counts as the wanted direction.
+      if (!state.pac.want) {
+        const inp = AR.dirInput();
+        state.pac.want = inp.left ? 'left' : inp.right ? 'right' : inp.up ? 'up' : inp.down ? 'down' : null;
+      }
       update(state, dt, null);
+      best.submit(state.score);
       state.events.forEach(function (e) {
         if (!A) return;
         if (e === 'eat') A.sfx.eat();
@@ -530,10 +549,7 @@
 
     function endRun() {
       started = false;
-      if (state.score > hi) {
-        hi = state.score;
-        U.store.set('hi.pacman', hi);
-      }
+      const hi = best.submit(state.score);
       if (state.won) {
         if (A) A.sfx.win();
         const level = state.level + 1;
@@ -556,11 +572,12 @@
     const unbind = AR.bindKeys(function (k, down) {
       if (down && KEY_DIR[k] && started) state.pac.want = KEY_DIR[k];
     });
-    const loop = AR.startLoop(frame, draw);
-    AR.help(wrap, 'Usa le quattro frecce per muoverti nel labirinto.');
+    const loop = AR.startLoop(frame, draw, { view: view, active: function () { return started && !state.over; } });
+    AR.help(wrap, 'Usa le quattro frecce per muoverti nel labirinto. P: pausa.');
     AR.overlay(wrap, 'RACCOON-MAN', 'Mangia tutti i puntini. I fantasmi ti inseguono. Il puntino grosso li spaventa: allora puoi mangiarli.', 'INIZIA', function () { startLevel(1, 0, 3); });
     return {
       destroy: function () {
+        best.submit(state.score);
         loop.stop();
         unbind();
       },

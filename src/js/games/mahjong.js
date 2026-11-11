@@ -396,9 +396,9 @@
       if (!alive) return;
       root.innerHTML = '';
       // One row at the top: title, numbers and buttons. This leaves more room for the tiles.
-      root.appendChild(U.el('div', { class: 'pill-row mj-bar' },
+      root.appendChild(U.el('div', { class: 'pill-row mj-bar actions' },
         U.el('div', { class: 'mj-title', text: 'Mahjong' }),
-        U.el('div', { class: 'pill', text: 'Coppie: ' + tiles.length / 2 }),
+        U.el('div', { class: 'pill', text: 'Coppie rimaste: ' + tiles.length / 2 }),
         U.el('div', { class: 'pill', text: 'Punti: ' + score }),
         U.el('div', { class: 'pill' }, 'Tempo ', U.el('span', { class: 'clock', text: elapsed() })),
         U.el('button', { class: 'btn', text: 'Suggerimento', onclick: hint }),

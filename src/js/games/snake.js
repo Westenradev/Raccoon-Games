@@ -84,9 +84,9 @@
     return 'moved';
   }
 
-  // Seconds between steps. Gets faster with more fish.
+  // Seconds between steps. It gets a little faster with each bite, down to 0.09 s.
   function stepTime(state) {
-    return Math.max(0.05, 0.14 - state.eaten * 0.004);
+    return Math.max(0.09, 0.15 - state.eaten * 0.003);
   }
 
   // ---------- Browser interface ----------
@@ -111,6 +111,7 @@
   }
   const FULL = ['XXX', 'XXX', 'XXX'];
   const FOOD = ['.X.', 'X.X', '.X.'];
+  const CRASH = ['X.X', '.X.', 'X.X'];
   const HEAD = { right: ['XX.', 'XXX', 'XX.'], left: ['.XX', 'XXX', '.XX'], up: ['.X.', 'XXX', 'XXX'], down: ['XXX', 'XXX', '.X.'] };
 
   function paint(g, state, hi) {
@@ -129,7 +130,9 @@
     g.fillRect(FRAME + COLS * CELL + 2, HUD - 5, 3, ROWS * CELL + 10);
     if (state.food) lcdCell(g, FRAME + state.food.x * CELL, HUD + state.food.y * CELL, FOOD);
     state.snake.forEach(function (s, i) {
-      lcdCell(g, FRAME + s.x * CELL, HUD + s.y * CELL, i === 0 ? HEAD[state.dir] : FULL);
+      // After a crash the head turns into a cross.
+      const head = state.alive || state.won ? HEAD[state.dir] : CRASH;
+      lcdCell(g, FRAME + s.x * CELL, HUD + s.y * CELL, i === 0 ? head : FULL);
     });
     AR.pixelText(g, String(state.score).padStart(4, '0'), FRAME, HUD / 2 - 2, 18, INK, 'left');
     AR.pixelText(g, 'RECORD ' + String(Math.max(hi, state.score)).padStart(4, '0'), VIEW_W - FRAME, HUD / 2 - 2, 12, INK, 'right');
@@ -154,13 +157,13 @@
     container.appendChild(wrap);
     const view = AR.createCanvas(wrap, VIEW_W, VIEW_H, 'snake');
     const g = view.ctx;
-    let hi = U.store.get('hi.snake', 0);
+    const best = AR.record('snake');
     let state = newGame(1);
     let started = false;
     let acc = 0;
 
     function draw() {
-      paint(g, state, hi);
+      paint(g, state, best.get());
     }
 
     function frame(dt) {
@@ -170,6 +173,7 @@
         acc -= stepTime(state);
         const r = stepSnake(state);
         if (A && r === 'ate') A.sfx.eat();
+        best.submit(state.score);
         if (r === 'dead') {
           if (A) state.won ? A.sfx.win() : A.sfx.hit();
           endRun();
@@ -179,10 +183,7 @@
 
     function endRun() {
       started = false;
-      if (state.score > hi) {
-        hi = state.score;
-        U.store.set('hi.snake', hi);
-      }
+      const hi = best.get();
       AR.overlay(wrap,
         state.won ? 'CAMPO PIENO!' : 'PARTITA FINITA',
         'Punti: ' + state.score + '. Bocconi: ' + state.eaten + '. Record: ' + hi + '.',
@@ -199,11 +200,12 @@
     const unbind = AR.bindKeys(function (k, down) {
       if (down && KEY_DIR[k] && started) turn(state, KEY_DIR[k]);
     });
-    const loop = AR.startLoop(frame, draw);
-    AR.help(wrap, 'Usa le quattro frecce per girare.');
+    const loop = AR.startLoop(frame, draw, { view: view, active: function () { return started && state.alive; } });
+    AR.help(wrap, 'Usa le quattro frecce per girare. P: pausa.');
     AR.overlay(wrap, 'SNAKE', 'Mangia i bocconi: il serpente si allunga. Non toccare il bordo e non toccare la coda.', 'INIZIA', newRun);
     return {
       destroy: function () {
+        best.submit(state.score);
         loop.stop();
         unbind();
       },

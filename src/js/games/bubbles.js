@@ -20,7 +20,7 @@
   const SHOOT_Y = 548;
   const DANGER_Y = 470; // a bubble centre at or under this line ends the game
   const SPEED = 760;
-  const SHOTS_PER_ROW = 6;
+  const SHOTS_PER_ROW = 7;
   const MAX_ANGLE = 1.35;
   // Six colours. Each one also has its own mark, so they can be told apart without colour.
   const COLORS = ['#e53935', '#fdd835', '#43a047', '#1e88e5', '#8e24aa', '#fb8c00'];
@@ -45,8 +45,9 @@
     return out.filter(function (p) { return p[0] >= base && p[1] >= 0 && p[1] < colsIn(p[0]); });
   }
 
+  // 4 colours on levels 1 and 2, 5 on levels 3 and 4, 6 from level 5.
   function kindsFor(level) {
-    return Math.min(KINDS.length, 3 + level);
+    return Math.min(KINDS.length, 3 + Math.ceil(level / 2));
   }
 
   function newGame(seed, level, score) {
@@ -54,7 +55,7 @@
     const lv = level || 1;
     const kinds = kindsFor(lv);
     const grid = new Map();
-    const rows = Math.min(8, 4 + lv);
+    const rows = Math.min(7, 4 + Math.ceil(lv / 2));
     for (let rid = 0; rid < rows; rid++) {
       for (let c = 0; c < colsIn(rid); c++) grid.set(key(rid, c), Math.floor(rnd() * kinds));
     }
@@ -69,7 +70,7 @@
       cur: 0,
       next: 0,
       shots: 0,
-      rowsLeft: 4 + lv * 2,
+      rowsLeft: 4 + lv,
       score: score || 0,
       over: false,
       won: false,
@@ -362,16 +363,19 @@
     g.restore();
     if (state.moving) paintBubble(g, state.moving.x, state.moving.y, state.moving.kind);
     else paintBubble(g, SHOOT_X, SHOOT_Y, state.cur);
-    AR.pixelText(g, 'DOPO', WIDTH - 44, SHOOT_Y - 28, 9, '#9aa0ff');
+    AR.pixelText(g, 'DOPO', WIDTH - 44, SHOOT_Y - 28, 11, '#c0c4ff');
     paintBubble(g, WIDTH - 44, SHOOT_Y, state.next);
-    AR.pixelText(g, 'FILE ' + state.rowsLeft, 10, HEIGHT - 14, 9, '#9aa0ff', 'left');
+    // Warns when the next row of bubbles comes down.
+    const toRow = SHOTS_PER_ROW - (state.shots % SHOTS_PER_ROW);
+    const warn = state.rowsLeft ? 'NUOVA FILA TRA ' + toRow + (toRow === 1 ? ' TIRO' : ' TIRI') : 'NIENTE PIU FILE';
+    AR.pixelText(g, warn, 10, HEIGHT - 14, 10, state.rowsLeft && toRow === 1 ? '#ff4a30' : '#c0c4ff', 'left');
 
     // Score bar.
     g.fillStyle = '#000';
     g.fillRect(0, 0, WIDTH, TOP - 3);
     AR.pixelText(g, String(state.score).padStart(5, '0'), 8, TOP / 2 - 1, 12, '#fff', 'left');
-    AR.pixelText(g, 'LIV.' + state.level, WIDTH / 2, TOP / 2 - 1, 10, '#ffe600');
-    AR.pixelText(g, String(Math.max(hi, state.score)).padStart(5, '0'), WIDTH - 8, TOP / 2 - 1, 12, '#ff4a30', 'right');
+    AR.pixelText(g, 'LIV.' + state.level, 124, TOP / 2 - 1, 11, '#ffe600');
+    AR.pixelText(g, 'RECORD ' + String(Math.max(hi, state.score)).padStart(5, '0'), WIDTH - 8, TOP / 2 - 1, 11, '#ff4a30', 'right');
   }
 
   function thumb(el) {
@@ -390,13 +394,14 @@
     container.appendChild(wrap);
     const view = AR.createCanvas(wrap, WIDTH, HEIGHT, 'bubbles');
     const g = view.ctx;
-    let hi = U.store.get('hi.bubbles', 0);
+    const best = AR.record('bubbles');
     let state = newGame(1, 1, 0);
     let started = false;
     let particles = [];
+    let aimHeld = 0;
 
     function draw() {
-      paint(g, state, hi, { particles: particles, aim: started });
+      paint(g, state, best.get(), { particles: particles, aim: started });
     }
 
     function frame(dt) {
@@ -410,9 +415,13 @@
       particles = particles.filter(function (p) { return p.life > 0; });
       if (!started || state.over) return;
       const inp = AR.dirInput();
-      if (inp.left) state.angle = Math.max(-MAX_ANGLE, state.angle - 1.3 * dt);
-      if (inp.right) state.angle = Math.min(MAX_ANGLE, state.angle + 1.3 * dt);
+      // Slow turn for the first moment of a key press, then faster: fine aim and quick sweeps.
+      aimHeld = inp.left || inp.right ? aimHeld + dt : 0;
+      const turn = (aimHeld < 0.25 ? 0.45 : 1.3) * dt;
+      if (inp.left) state.angle = Math.max(-MAX_ANGLE, state.angle - turn);
+      if (inp.right) state.angle = Math.min(MAX_ANGLE, state.angle + turn);
       update(state, dt);
+      best.submit(state.score);
       state.events.forEach(function (e) {
         if (e === 'pop') {
           state.gone.forEach(function (b) { particles.push({ x: b.x, y: b.y, kind: b.kind, fall: b.fall, vy: 0, life: 1 }); });
@@ -426,14 +435,13 @@
 
     function endRun() {
       started = false;
-      if (state.score > hi) {
-        hi = state.score;
-        U.store.set('hi.bubbles', hi);
-      }
+      // The prize for a finished level counts for the record too.
+      if (state.won) state.score += 100;
+      const hi = best.submit(state.score);
       if (state.won) {
         if (A) A.sfx.win();
         const next = state.level + 1;
-        const score = state.score + 100;
+        const score = state.score;
         AR.overlay(wrap, 'LIVELLO ' + state.level + ' FINITO', 'Punti: ' + score + ' (100 di premio).', 'LIVELLO ' + next, function () { startLevel(next, score); });
       } else {
         if (A) A.sfx.lose();
@@ -458,21 +466,27 @@
       const a = Math.atan2(x - SHOOT_X, Math.max(10, SHOOT_Y - y));
       state.angle = Math.max(-MAX_ANGLE, Math.min(MAX_ANGLE, a));
     }
-    view.canvas.addEventListener('mousemove', function (e) { if (started) aimFromEvent(e); });
-    view.canvas.addEventListener('mousedown', function (e) {
-      if (!started) return;
+    // The mouse works on the whole game area, not only on the narrow canvas.
+    const onMove = function (e) { if (started && !loop.isPaused()) aimFromEvent(e); };
+    const onDown = function (e) {
+      if (!started || loop.isPaused() || e.button !== 0 || (e.target.closest && e.target.closest('button'))) return;
       aimFromEvent(e);
       shoot();
-    });
+    };
+    container.addEventListener('mousemove', onMove);
+    container.addEventListener('mousedown', onDown);
 
     const unbind = AR.bindKeys(function (k, down) {
       if (down && (k === ' ' || k === 'arrowup' || k === 'w')) shoot();
     });
-    const loop = AR.startLoop(frame, draw);
-    AR.help(wrap, 'Mira con il mouse e fai clic per tirare. Oppure: frecce sinistra e destra per mirare, Spazio per tirare.');
+    const loop = AR.startLoop(frame, draw, { view: view, active: function () { return started && !state.over; } });
+    AR.help(wrap, 'Mira con il mouse e fai clic per tirare. Oppure: frecce sinistra e destra per mirare, Spazio per tirare. P: pausa.');
     AR.overlay(wrap, 'BOLLE', 'Unisci tre bolle dello stesso colore per farle scoppiare. Non farle scendere sotto la linea rossa.', 'INIZIA', function () { startLevel(1, 0); });
     return {
       destroy: function () {
+        best.submit(state.score);
+        container.removeEventListener('mousemove', onMove);
+        container.removeEventListener('mousedown', onDown);
         loop.stop();
         unbind();
       },

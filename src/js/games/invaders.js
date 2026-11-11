@@ -87,6 +87,7 @@
     state.wave += 1;
     state.score += 100;
     state.invaders = makeInvaders();
+    state.shields = makeShields(); // new shelters for each wave
     state.fx = 40;
     state.fy = 84;
     state.dir = 1;
@@ -107,7 +108,9 @@
   function stepEvery(state) {
     const total = COLS * ROWS;
     const frac = aliveCount(state) / total;
-    return Math.max(0.05, (0.7 - (state.wave - 1) * 0.07) * (0.25 + 0.75 * frac));
+    // Later waves are faster, but never so fast that they cannot be stopped.
+    const base = Math.max(0.36, 0.7 - (state.wave - 1) * 0.05);
+    return Math.max(0.06, base * (0.25 + 0.75 * frac));
   }
 
   function hitShield(state, x, y, w, h) {
@@ -170,7 +173,7 @@
 
     // Enemy fire from the lowest alive invader of a random column.
     state.fireAcc += dt;
-    const fireEvery = Math.max(0.45, 1.7 - (state.wave - 1) * 0.15);
+    const fireEvery = Math.max(0.7, 1.7 - (state.wave - 1) * 0.12);
     if (state.fireAcc >= fireEvery) {
       state.fireAcc = 0;
       const lowest = {};
@@ -225,6 +228,16 @@
     }
     state.steps += 1;
     state.events.push('step');
+    // Invaders that reach the shelters break the cells they touch.
+    alive.forEach(function (inv) {
+      const p = invaderPos(state, inv);
+      if (p.y + INV_H / 2 < SHIELD_Y) return;
+      state.shields.forEach(function (block) {
+        block.forEach(function (c) {
+          if (c.alive && c.x < p.x + INV_W / 2 && c.x + SHIELD_CELL > p.x - INV_W / 2 && c.y < p.y + INV_H / 2 && c.y + SHIELD_CELL > p.y - INV_H / 2) c.alive = false;
+        });
+      });
+    });
     // Invaders reaching the player row end the game.
     const lowestY = Math.max.apply(null, alive.map((i) => state.fy + i.row * SPACING_Y));
     if (lowestY + INV_H / 2 >= PLAYER_Y - 10) {
@@ -285,12 +298,13 @@
     // Ground line and spare cannons.
     g.fillStyle = GREEN;
     g.fillRect(0, H - 24, W, 2);
-    for (let i = 0; i < state.lives - 1; i++) AR.sprite(g, CANNON, 12 + i * 34, H - 19, 2, GREEN);
-    AR.pixelText(g, 'ONDATA ' + state.wave, W - 10, H - 11, 10, GREEN, 'right');
+    AR.pixelText(g, 'VITE', 10, H - 11, 11, GREEN, 'left');
+    for (let i = 0; i < state.lives; i++) AR.sprite(g, CANNON, 64 + i * 34, H - 19, 2, GREEN);
+    AR.pixelText(g, 'ONDATA ' + state.wave, W - 10, H - 11, 11, GREEN, 'right');
     // Score bar.
-    AR.pixelText(g, 'PUNTI', 12, 14, 10, WHITE, 'left');
+    AR.pixelText(g, 'PUNTI', 12, 14, 11, WHITE, 'left');
     AR.pixelText(g, String(state.score).padStart(5, '0'), 12, 32, 12, WHITE, 'left');
-    AR.pixelText(g, 'RECORD', W - 12, 14, 10, RED, 'right');
+    AR.pixelText(g, 'RECORD', W - 12, 14, 11, RED, 'right');
     AR.pixelText(g, String(Math.max(hi, state.score)).padStart(5, '0'), W - 12, 32, 12, RED, 'right');
   }
 
@@ -322,12 +336,12 @@
     container.appendChild(wrap);
     const view = AR.createCanvas(wrap, W, H, 'invaders');
     const g = view.ctx;
-    let hi = U.store.get('hi.invaders', 0);
+    const best = AR.record('invaders');
     let state = newGame(1);
     let started = false;
 
     function draw() {
-      paint(g, state, hi);
+      paint(g, state, best.get());
     }
 
     // Called by the loop. Uses the game logic function update(state, dt, input).
@@ -336,6 +350,7 @@
       state.pops = state.pops.filter(function (b) { return b.life > 0; });
       if (!started || state.over) return;
       update(state, dt, AR.dirInput());
+      best.submit(state.score);
       state.events.forEach(function (e) {
         if (!A) return;
         if (e === 'shoot') A.sfx.shoot();
@@ -349,10 +364,7 @@
 
     function gameOver() {
       started = false;
-      if (state.score > hi) {
-        hi = state.score;
-        U.store.set('hi.invaders', hi);
-      }
+      const hi = best.submit(state.score);
       if (A) A.sfx.lose();
       AR.overlay(wrap, 'PARTITA FINITA', 'Punti: ' + state.score + '. Ondata: ' + state.wave + '. Record: ' + hi + '.', 'GIOCA ANCORA', newRun);
     }
@@ -363,11 +375,12 @@
     }
 
     const unbind = AR.bindKeys(function () {});
-    const loop = AR.startLoop(frame, draw);
-    AR.help(wrap, 'Frecce sinistra e destra: muovi il cannone. Spazio: spara.');
+    const loop = AR.startLoop(frame, draw, { view: view, active: function () { return started && !state.over; } });
+    AR.help(wrap, 'Frecce sinistra e destra: muovi il cannone. Spazio: spara. P: pausa.');
     AR.overlay(wrap, 'RACCOON DEFENDER', 'Gli invasori scendono. Colpiscili tutti prima che arrivino a terra. I ripari verdi ti proteggono.', 'INIZIA', newRun);
     return {
       destroy: function () {
+        best.submit(state.score);
         loop.stop();
         unbind();
       },

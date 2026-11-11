@@ -251,8 +251,8 @@
     }
     if (state.cur && !state.over) {
       const c = state.cur;
-      g.strokeStyle = BASE[c.type].color;
-      g.globalAlpha = 0.55;
+      g.strokeStyle = '#fff';
+      g.globalAlpha = 0.5;
       g.lineWidth = 2;
       cells(c.type, c.rot, c.x, ghostY(state)).forEach(function (p) {
         if (p.y >= 0) g.strokeRect(p.x * CELL + 3, p.y * CELL + 3, CELL - 6, CELL - 6);
@@ -327,22 +327,16 @@
     container.appendChild(wrap);
     const view = AR.createCanvas(wrap, VIEW_W, VIEW_H, 'tetris');
     const g = view.ctx;
-    let hi = U.store.get('hi.tetris', 0);
+    const best = AR.record('tetris');
     let state = newGame(1);
     let started = false;
-    let paused = false;
+    let lastPiece = null;
     const fx = { flashes: [], sparks: [] };
     // Time until a held key repeats, per direction.
     const hold = { left: 0, right: 0, down: 0 };
 
     function draw() {
-      paint(g, state, hi, fx);
-      if (paused) {
-        g.fillStyle = 'rgba(0,0,0,0.72)';
-        g.fillRect(0, 0, VIEW_W, VIEW_H);
-        AR.pixelText(g, 'PAUSA', VIEW_W / 2, VIEW_H / 2 - 16, 28, '#ffe600');
-        AR.pixelText(g, 'Premi P', VIEW_W / 2, VIEW_H / 2 + 26, 13, '#fff');
-      }
+      paint(g, state, best.get(), fx);
     }
 
     function afterAction() {
@@ -360,23 +354,19 @@
         });
         state.cleared = 0;
       }
+      best.submit(state.score);
       if (state.over) gameOver();
     }
 
     function gameOver() {
       started = false;
-      if (state.score > hi) {
-        hi = state.score;
-        U.store.set('hi.tetris', hi);
-      }
       if (A) A.sfx.lose();
-      AR.overlay(wrap, 'PARTITA FINITA', 'Punti: ' + state.score + '. Righe: ' + state.lines + '. Record: ' + hi + '.', 'GIOCA ANCORA', newRun);
+      AR.overlay(wrap, 'PARTITA FINITA', 'Punti: ' + state.score + '. Righe: ' + state.lines + '. Record: ' + best.get() + '.', 'GIOCA ANCORA', newRun);
     }
 
     function newRun() {
       state = newGame(Math.floor(Math.random() * 1e9));
       started = true;
-      paused = false;
       fx.flashes = [];
       fx.sparks = [];
       hold.left = hold.right = hold.down = 0;
@@ -392,8 +382,13 @@
         p.y += p.vy * dt;
       });
       fx.sparks = fx.sparks.filter(function (p) { return p.life > 0; });
-      if (!started || paused || state.over) return;
+      if (!started || state.over) return;
       const inp = AR.dirInput();
+      // A new piece does not fall fast just because the down key is still held from the last one.
+      if (state.cur !== lastPiece) {
+        lastPiece = state.cur;
+        if (inp.down) hold.down = 0.3;
+      }
       ['left', 'right', 'down'].forEach(function (d) {
         if (!inp[d]) {
           hold[d] = 0;
@@ -411,12 +406,7 @@
     }
 
     const unbind = AR.bindKeys(function (k, down) {
-      if (!down || !started || state.over) return;
-      if (k === 'p') {
-        paused = !paused;
-        return;
-      }
-      if (paused) return;
+      if (!down || !started || state.over || loop.isPaused() || k === 'p') return;
       // The first press acts at once. A held key repeats after a short wait (see frame).
       if (k === 'arrowleft' || k === 'a') { move(state, -1); hold.left = 0.2; }
       else if (k === 'arrowright' || k === 'd') { move(state, 1); hold.right = 0.2; }
@@ -425,19 +415,20 @@
       else if (k === ' ') { hardDrop(state); if (A) A.sfx.place(); }
       afterAction();
     });
-    const loop = AR.startLoop(frame, draw);
+    const loop = AR.startLoop(frame, draw, { view: view, active: function () { return started && !state.over; } });
     AR.help(wrap, 'Frecce sinistra e destra: muovi. Freccia su: ruota. Freccia giù: scendi. Spazio: lascia cadere. P: pausa.');
     AR.overlay(wrap, 'TETRIS', 'Incastra i pezzi e riempi le righe. Una riga piena sparisce.', 'INIZIA', newRun);
 
     return {
       destroy: function () {
+        best.submit(state.score);
         loop.stop();
         unbind();
       },
       debug: {
         get state() { return state; },
         get started() { return started; },
-        get paused() { return paused; },
+        get paused() { return loop.isPaused(); },
       },
     };
   }

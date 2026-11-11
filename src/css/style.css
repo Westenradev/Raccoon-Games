@@ -599,7 +599,7 @@ body.arcade-mode #topbar { background: #0c0c10; border-bottom-color: #2a2a35; }
   box-shadow: 4px 4px 0 #b38f00;
 }
 .arcade-stage .btn:active { transform: translate(3px, 3px); box-shadow: 1px 1px 0 #b38f00; }
-.arcade-help { margin: 12px auto 0; text-align: center; font-size: 15px; color: #8d8da6; }
+.arcade-help { margin: 10px auto 0; text-align: center; font-size: 16px; color: #c4c4d6; }
 
 /* ---------- Narrow windows ---------- */
 @media (max-width: 980px) {

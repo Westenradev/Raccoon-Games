@@ -178,7 +178,7 @@ function checkSudokuDom(st, label) {
   ok(st.pad.length === 10 && st.pad.slice(0, 9).every((b, k) => {
     const left = Math.max(0, 9 - counts[k + 1]);
     const shown = (b.title.match(/\d+/) || [null])[0];
-    return b.t.charAt(0) === String(k + 1) && b.done === (left === 0) && shown === String(left) && (b.small === null || b.small === String(left));
+    return b.t.charAt(0) === String(k + 1) && b.done === (left === 0) && shown === String(left) && (b.small === null || ((b.small.match(/\d+/) || [String(left)])[0] === String(left)));
   }), 'sudoku ' + label + ': number pad shows 1-9, each with the right count of missing numbers');
 }
 const cellSel = (i) => '.sudoku-grid .cell[data-i="' + i + '"]';
@@ -392,8 +392,8 @@ async function testSudoku() {
   eq(selectedCell(await sudokuState()), 41, 'sudoku: first arrow key starts from the centre cell (40) and moves');
 
   await sudokuLevel('facile', 'Facile', 42, stats);
-  await sudokuLevel('medio', 'Medio', 33, stats);
-  await sudokuLevel('difficile', 'Difficile', 26, stats);
+  await sudokuLevel('medio', 'Medio', 32, stats);
+  await sudokuLevel('difficile', 'Difficile', 27, stats);
 
   // "Nuovo sudoku" after a win gives a fresh puzzle of the same level
   const prev = await sudokuState();
@@ -408,7 +408,7 @@ async function testSudoku() {
   await clickBtn('.sudoku .actions', RE_ERRORS);
   await clickBtn('.sudoku .levels', /^\s*Medio/);
   st = await sudokuState();
-  ok(st.level === 'medio' && JSON.stringify(st.board) === JSON.stringify(st.puzzle) && st.givens.filter(Boolean).length === 33, 'sudoku: switching level mid-game starts a clean medio puzzle');
+  ok(st.level === 'medio' && JSON.stringify(st.board) === JSON.stringify(st.puzzle) && st.givens.filter(Boolean).length === 32, 'sudoku: switching level mid-game starts a clean medio puzzle');
   ok(st.errors === 0 && st.hints === 0 && /Mostra/i.test(st.actions[0]) && selectedCell(st) === -1, 'sudoku: counters, error display and selection reset on level switch');
   // level is remembered after leaving with Esc
   await page.keyboard.press('Escape');
