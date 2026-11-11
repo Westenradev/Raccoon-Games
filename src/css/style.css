@@ -374,11 +374,11 @@ body.arcade-mode #topbar { background: #0c0c10; border-bottom-color: #2a2a35; }
 }
 .rank-tag.g0 { background: #b3261e; }
 .rank-tag.g1 { background: #1c3f7c; }
+.cascade-skip { position: absolute; bottom: 14px; left: 0; right: 0; z-index: 1600; text-align: center; font-size: 15px; color: rgba(255, 255, 255, 0.85); pointer-events: none; }
 .cascade { position: absolute; inset: 0; z-index: 1500; border-radius: 12px; pointer-events: none; }
 
 /* ---------- Sudoku: a page of a puzzle magazine ---------- */
 .sudoku.sheet {
-  width: min(100%, 640px);
   padding: 16px 30px 18px;
   background: var(--carta);
   color: var(--inchiostro);
@@ -393,12 +393,15 @@ body.arcade-mode #topbar { background: #0c0c10; border-bottom-color: #2a2a35; }
 .sudoku .levels .btn:not(.ghost), .sudoku .actions .btn.primary { background: var(--inchiostro); color: var(--carta); }
 .sudoku .levels .btn.ghost, .sudoku .actions .btn.ghost { color: var(--inchiostro); }
 .sudoku .msg { color: var(--inchiostro); font-size: 17px; }
+.sudoku.sheet { width: min(100%, 860px); }
+.sudoku-main { display: flex; gap: 26px; align-items: center; justify-content: center; width: 100%; }
 .sudoku-grid {
   display: grid;
   grid-template-columns: repeat(9, minmax(0, 1fr));
   grid-template-rows: repeat(9, minmax(0, 1fr));
-  width: min(100%, calc((100vh - 372px) / 1.1));
+  width: min(62vw, calc(100vh - 318px));
   min-width: 260px;
+  flex: 0 0 auto;
   aspect-ratio: 1;
   border: 3px solid var(--inchiostro);
   background: #fffdf6;
@@ -408,7 +411,7 @@ body.arcade-mode #topbar { background: #0c0c10; border-bottom-color: #2a2a35; }
   align-items: center;
   justify-content: center;
   font-family: var(--testo);
-  font-size: clamp(16px, 3.6vh, 32px);
+  font-size: clamp(16px, 3.8vh, 34px);
   line-height: 1;
   overflow: hidden;
   font-variant-numeric: tabular-nums;
@@ -427,36 +430,51 @@ body.arcade-mode #topbar { background: #0c0c10; border-bottom-color: #2a2a35; }
 .sudoku-grid .cell.given { color: var(--inchiostro); font-weight: 700; }
 .sudoku-grid .cell.peer { background: #f0e9d2; }
 .sudoku-grid .cell.same { background: #e3d6a8; }
-.sudoku-grid .cell.sel { background: #ffd83b; }
 .sudoku-grid .cell.bad { color: var(--lacca); background: #f8d5d0; text-decoration: underline wavy; }
-.sudoku .pad { display: grid; grid-template-columns: repeat(10, 1fr); gap: 6px; width: min(100%, calc((100vh - 372px) / 1.1)); min-width: 260px; }
+.sudoku-grid .cell.sel { background: #ffd83b; }
+.sudoku-grid .cell.sel.bad { background: #ffd83b; box-shadow: inset 0 0 0 3px var(--lacca); }
+/* Number pad beside the grid: 3 x 3 large keys and the erase key. */
+.sudoku .pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; width: clamp(170px, 24vh, 230px); flex: 0 0 auto; }
 .sudoku .pad .num {
-  position: relative;
   appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
   font: inherit;
-  font-size: clamp(16px, 2.6vh, 24px);
+  font-size: clamp(22px, 3.6vh, 32px);
   font-weight: 700;
+  line-height: 1;
   aspect-ratio: 1;
   color: var(--inchiostro);
   background: #fffdf6;
   border: 1.5px solid var(--inchiostro);
-  border-radius: 50%;
+  border-radius: 10px;
   cursor: pointer;
   padding: 0;
   box-shadow: none;
 }
 .sudoku .pad .num:hover { background: #ffd83b; }
-.sudoku .pad .num.done { opacity: 0.28; }
-.sudoku .pad .num small { position: absolute; right: -2px; top: -6px; font-size: 11px; font-weight: 400; background: var(--carta); padding: 0 3px; }
-.sudoku .pad .num.erase { font-size: 11px; border-style: dashed; }
+.sudoku .pad .num.done { opacity: 0.35; }
+.sudoku .pad .num small { font-size: 12px; font-weight: 400; color: #5d4f3f; }
+.sudoku .pad .num.erase { grid-column: 1 / -1; aspect-ratio: auto; padding: 10px 0; font-size: 17px; border-style: dashed; }
+@media (max-width: 760px) {
+  .sudoku-main { flex-direction: column; gap: 12px; }
+  .sudoku-grid { width: min(100%, calc(100vh - 470px)); }
+  .sudoku .pad { grid-template-columns: repeat(5, 1fr); width: min(100%, 420px); }
+  .sudoku .pad .num.erase { grid-column: auto; aspect-ratio: 1; font-size: 12px; padding: 0; }
+  .sudoku .pad .num small { display: none; }
+}
 
 /* ---------- Mahjong ---------- */
 .mahjong.table-jade {
   width: 100%;
   max-width: 1120px;
-  padding: 12px 14px 16px;
+  padding: 8px 10px 10px;
+  gap: 8px;
   border-radius: 14px;
-  border: 10px solid #2a1710;
+  border: 8px solid #2a1710;
   background: radial-gradient(ellipse at 50% 35%, #1f6157, #0b2f2c 90%);
   box-shadow: inset 0 0 0 2px #b8902f, inset 0 0 70px rgba(0, 0, 0, 0.5), 0 18px 40px rgba(0, 0, 0, 0.55);
 }
@@ -478,8 +496,10 @@ body.arcade-mode #topbar { background: #0c0c10; border-bottom-color: #2a2a35; }
 .mj-tile.blocked { filter: brightness(0.74) saturate(0.8); cursor: default; }
 .mj-tile.free:hover { filter: brightness(1.06); }
 .mj-tile.sel { outline: 4px solid #f6c945; outline-offset: -1px; filter: brightness(1.08); }
-.mj-tile.hint { outline: 4px solid #fff; outline-offset: -1px; animation: blink 0.7s ease-in-out infinite; }
-@keyframes blink { 50% { outline-color: rgba(255, 255, 255, 0.15); } }
+.mj-tile.hint { outline: 5px solid #ff3d7f; outline-offset: -1px; filter: brightness(1.1); animation: blink 0.7s ease-in-out infinite; }
+@keyframes blink { 50% { outline-color: #ffd0e0; } }
+.mj-bar { align-items: center; gap: 8px; }
+.mj-bar .btn { padding: 7px 14px; font-size: 15px; }
 
 /* ---------- Dama ---------- */
 .dama.tabletop { background: linear-gradient(160deg, #3b2416, #24150d) padding-box, linear-gradient(135deg, #6b4226, #3a2214 45%, #7a4e2c 55%, #2c190f) border-box; }
@@ -528,9 +548,18 @@ body.arcade-mode #topbar { background: #0c0c10; border-bottom-color: #2a2a35; }
   position: absolute;
   inset: -9%;
   border-radius: 50%;
-  border: 3px solid rgba(255, 255, 255, 0.5);
+  border: 3px solid #f6c945;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
 }
-.piece.must::after { border-color: #fff; animation: pulse 1s ease-in-out infinite; }
+.piece.must::after { border-width: 4px; border-color: #fff; animation: pulse 1s ease-in-out infinite; }
+.checker-board .sq.taken::before {
+  content: '';
+  position: absolute;
+  width: 56%;
+  height: 56%;
+  border-radius: 50%;
+  border: 3px dashed rgba(255, 120, 100, 0.9);
+}
 .legend { display: flex; gap: 22px; align-items: center; justify-content: center; flex-wrap: wrap; font-size: 15px; color: rgba(247, 242, 228, 0.8); }
 .legend .piece { width: 26px; height: 26px; display: inline-block; vertical-align: middle; margin-right: 8px; }
 .legend span { display: inline-flex; align-items: center; }

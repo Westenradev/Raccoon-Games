@@ -187,6 +187,10 @@
     return best;
   }
 
+  function pieces(n) {
+    return n + (n === 1 ? ' pezzo' : ' pezzi');
+  }
+
   function countPieces(board, color) {
     let n = 0;
     for (const p of board) if (p && p.c === color) n += 1;
@@ -207,6 +211,7 @@
     let over = null; // 'human' | 'cpu' | 'draw'
     let thinking = false;
     let lastMove = null;
+    let choice = null; // capture moves to choose from, when two share start and end
     let note = '';
     const wins = U.store.get('dama.score', { human: 0, cpu: 0 });
     const root = U.el('div', { class: 'dama game-panel tabletop' });
@@ -221,6 +226,7 @@
       over = null;
       thinking = false;
       lastMove = null;
+      choice = null;
       note = '';
       render();
     }
@@ -230,7 +236,10 @@
       if (result === 'human') wins.human += 1;
       if (result === 'cpu') wins.cpu += 1;
       U.store.set('dama.score', wins);
-      if (A) result === 'human' ? A.sfx.win() : A.sfx.lose();
+      if (!A) return;
+      if (result === 'human') A.sfx.win();
+      else if (result === 'cpu') A.sfx.lose();
+      else A.sfx.ok();
     }
 
     function playMove(mv) {
@@ -255,22 +264,40 @@
         thinking = false;
         if (mv) playMove(mv);
         note = mv && mv.caps.length ? 'L\'avversario ha mangiato ' + mv.caps.length + (mv.caps.length === 1 ? ' pezzo.' : ' pezzi.') : '';
+        // Tell the player at once when the answer must be a capture.
+        const reply = over ? [] : legalMoves(board, WHITE);
+        if (note && reply.length && reply[0].caps.length) note += ' Ora devi mangiare tu: tocca un pezzo con il cerchio.';
         render();
       }, 500));
+    }
+
+    function humanMove(mv) {
+      choice = null;
+      playMove(mv);
+      note = '';
+      render();
+      if (!over) cpuTurn();
     }
 
     function clickSquare(sq) {
       if (over || turn !== WHITE || thinking) return;
       const moves = legalMoves(board, WHITE);
+      // Two captures with the same start and end: the player picks the first piece to take.
+      if (choice) {
+        const picked = choice.find(function (m) { return m.caps[0] === sq; });
+        choice = null;
+        if (picked) return humanMove(picked);
+      }
       if (selected !== null) {
-        const mv = moves.find(function (m) { return m.from === selected && m.to === sq; });
-        if (mv) {
-          playMove(mv);
-          note = '';
-          render();
-          if (!over) cpuTurn();
-          return;
+        const same = moves.filter(function (m) { return m.from === selected && m.to === sq; });
+        const firsts = same.map(function (m) { return m.caps[0]; });
+        if (same.length > 1 && new Set(firsts).size > 1) {
+          choice = same;
+          note = 'Puoi mangiare in due modi. Tocca il primo pezzo che vuoi mangiare.';
+          if (A) A.sfx.click();
+          return render();
         }
+        if (same.length) return humanMove(same[0]);
       }
       const p = board[sq];
       if (p && p.c === WHITE) {
@@ -280,7 +307,7 @@
           if (A) A.sfx.click();
         } else {
           selected = null;
-          note = moves[0].caps.length ? 'Devi mangiare: muovi un pezzo con il cerchio bianco.' : 'Questo pezzo non può muoversi.';
+          note = moves[0].caps.length ? 'Devi mangiare: muovi un pezzo con il cerchio.' : 'Questo pezzo non può muoversi.';
           if (A) A.sfx.bad();
         }
       } else {
@@ -295,12 +322,14 @@
       const myTurn = !over && turn === WHITE && !thinking;
       const moves = myTurn ? legalMoves(board, WHITE) : [];
       const movable = new Set(moves.map(function (m) { return m.from; }));
-      const targets = new Set(moves.filter(function (m) { return m.from === selected; }).map(function (m) { return m.to; }));
+      const targets = choice
+        ? new Set(choice.map(function (m) { return m.caps[0]; }))
+        : new Set(moves.filter(function (m) { return m.from === selected; }).map(function (m) { return m.to; }));
       const mustCapture = moves.length > 0 && moves[0].caps.length > 0;
 
       root.appendChild(U.el('div', { class: 'pill-row' },
-        U.el('div', { class: 'pill', text: 'Tu (bianco): ' + countPieces(board, WHITE) + ' pezzi' }),
-        U.el('div', { class: 'pill', text: 'Avversario (nero): ' + countPieces(board, BLACK) + ' pezzi' }),
+        U.el('div', { class: 'pill', text: 'Tu (bianco): ' + pieces(countPieces(board, WHITE)) }),
+        U.el('div', { class: 'pill', text: 'Avversario (nero): ' + pieces(countPieces(board, BLACK)) }),
         U.el('div', { class: 'pill', text: 'Partite vinte: ' + wins.human + ' a ' + wins.cpu })));
 
       const boardEl = U.el('div', { class: 'checker-board' });
@@ -310,6 +339,7 @@
         if (selected === sq) cls.push('sel');
         if (targets.has(sq)) cls.push('target');
         if (lastMove && (lastMove.from === sq || lastMove.to === sq)) cls.push('last');
+        if (lastMove && lastMove.caps.indexOf(sq) >= 0) cls.push('taken');
         const cell = U.el('div', { class: cls.join(' '), 'data-sq': sq, onclick: dark ? function () { clickSquare(sq); } : null });
         const p = board[sq];
         if (p) {
@@ -323,9 +353,9 @@
       root.appendChild(boardEl);
 
       let msg = note;
-      if (over) msg = over === 'human' ? 'Hai vinto!' : over === 'cpu' ? 'Ha vinto l\'avversario' : 'Patta: 40 mosse senza prese.';
+      if (over) msg = over === 'human' ? 'Hai vinto!' : over === 'cpu' ? 'Ha vinto l\'avversario' : 'Patta: 40 mosse a testa senza prese e senza mosse di pedina.';
       else if (thinking) msg = 'L\'avversario sta pensando…';
-      else if (!msg) msg = mustCapture ? 'Devi mangiare. Tocca un pezzo con il cerchio bianco.' : (selected === null ? 'Tocca un tuo pezzo, poi la casella di arrivo.' : 'Ora tocca una casella con il pallino bianco.');
+      else if (!msg) msg = mustCapture ? 'Devi mangiare. Tocca un pezzo con il cerchio.' : (selected === null ? 'Tocca un tuo pezzo, poi la casella di arrivo.' : 'Ora tocca una casella con il pallino bianco.');
       root.appendChild(U.el('div', { class: 'msg' + (over ? ' big' : ''), text: msg }));
 
       const levels = U.el('div', { class: 'levels' }, U.el('span', { class: 'hint', text: 'Livello' }));

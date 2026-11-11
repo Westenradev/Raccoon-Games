@@ -63,7 +63,11 @@
 
   // Starts a round. The player who is not the dealer plays first.
   function startRound(match, rnd) {
-    const deck = U.shuffle(D.makeDeck(), rnd);
+    // A table with three or four Re can never be cleared, so those deals are shuffled again.
+    let deck;
+    do {
+      deck = U.shuffle(D.makeDeck(), rnd);
+    } while (deck.slice(0, 4).filter(function (c) { return c.rank === 10; }).length >= 3);
     const table = deck.splice(0, 4);
     match.round += 1;
     return {
@@ -232,6 +236,7 @@
     let choosing = null; // { cardId, opts } when the player must pick one of several captures
     let preview = null; // { card, takeIds } while the CPU shows its move
     let note = '';
+    let roundStartedAt = 0;
     const root = U.el('div', { class: 'scopa game-panel tabletop' });
     container.appendChild(root);
 
@@ -250,6 +255,7 @@
     }
 
     function startNewRound() {
+      roundStartedAt = Date.now();
       state = startRound(match, rnd);
       choosing = null;
       preview = null;
@@ -298,19 +304,27 @@
 
     function clickHand(card) {
       if (busy || state.ended || state.turn !== HUMAN) return;
+      // The second click of a double click on "Prossima mano" must not play a card.
+      if (Date.now() - roundStartedAt < 500) return;
       const opts = captureOptions(state.table, card.rank);
       if (opts.length <= 1) return humanPlay(card.id, opts[0] || []);
       choosing = { cardId: card.id, opts: opts };
-      note = 'Con ' + D.cardName(card) + ' puoi fare più prese. Scegli quale.';
+      note = 'Con ' + D.cardName(card) + ' puoi fare più prese. Scegli quale con i pulsanti qui sotto.';
       if (A) A.sfx.click();
       render();
     }
 
+    // Shows the table after the last card for a moment, then the points of the hand.
     function roundEnd() {
       const over = closeRound(match, state);
-      const r = state.result;
       busy = true;
+      note = describe(state.last) + ' Mano finita: le carte rimaste vanno a chi ha preso per ultimo.';
       render();
+      later(function () { showRoundResult(over); }, 1500);
+    }
+
+    function showRoundResult(over) {
+      const r = state.result;
       const line = function (label, a, b) {
         return U.el('tr', null, U.el('td', { text: label }), U.el('td', { text: String(a) }), U.el('td', { text: String(b) }));
       };
@@ -367,7 +381,13 @@
       const tableRow = U.el('div', { class: 'felt' });
       const marked = preview ? preview.takeIds : (choosing ? [].concat.apply([], choosing.opts) : []);
       state.table.forEach(function (c) {
-        tableRow.appendChild(D.cardEl(c, { selected: marked.indexOf(c.id) >= 0, disabled: true }));
+        // While a capture is being chosen, a table card that is part of only one capture picks it.
+        const mine = choosing && myTurn ? choosing.opts.filter(function (o) { return o.indexOf(c.id) >= 0; }) : [];
+        tableRow.appendChild(D.cardEl(c, {
+          selected: marked.indexOf(c.id) >= 0,
+          disabled: mine.length !== 1,
+          onclick: mine.length === 1 ? function () { humanPlay(choosing.cardId, mine[0]); } : null,
+        }));
       });
       if (preview) {
         const played = D.cardEl(preview.card, { disabled: true });

@@ -192,7 +192,11 @@
       const s = score(hand);
       if (s.winner === HUMAN) wins[0] += 1;
       else if (s.winner === CPU) wins[1] += 1;
-      if (A) s.winner === HUMAN ? A.sfx.win() : A.sfx.lose();
+      if (A) {
+        if (s.winner === HUMAN) A.sfx.win();
+        else if (s.winner === CPU) A.sfx.lose();
+        else A.sfx.ok();
+      }
       busy = true;
       note = '';
       render();
@@ -212,9 +216,12 @@
       hand.hands[CPU].forEach(function () { cpuHand.appendChild(D.cardEl(null, { hidden: true, small: true })); });
       // The deck with the briscola card sideways under it.
       const stock = U.el('div', { class: 'stock' + (hand.deck.length ? '' : ' empty') });
-      const trump = D.cardEl(hand.trumpCard, { disabled: true });
-      trump.classList.add('trump');
-      stock.appendChild(trump);
+      // The briscola card is on the table only until the last draw takes it.
+      if (hand.deck.length) {
+        const trump = D.cardEl(hand.trumpCard, { disabled: true });
+        trump.classList.add('trump');
+        stock.appendChild(trump);
+      }
       if (hand.deck.length > 1) stock.appendChild(D.cardEl(null, { hidden: true }));
       const stockBox = U.el('div', { class: 'pile' }, stock,
         U.el('div', { class: 'stock-label' }, 'Briscola: ', U.el('b', { text: D.SUITS[hand.trumpSuit].name })),

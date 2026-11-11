@@ -24,6 +24,20 @@ test('sudoku: every level gives a valid grid with exactly one solution', () => {
   }
 });
 
+test('sudoku: no level needs guessing, and Difficile needs more than single steps', () => {
+  const grades = { facile: [], medio: [], difficile: [] };
+  for (const level of Object.keys(grades)) {
+    for (let seed = 1; seed <= 12; seed++) grades[level].push(Su.grade(Su.generatePuzzle(level, U.makeRng(seed * 31)).puzzle));
+  }
+  assert.ok(grades.facile.every((g) => g === 0), 'facile ' + grades.facile);
+  assert.ok(grades.medio.every((g) => g === 0), 'medio ' + grades.medio);
+  assert.ok(grades.difficile.every((g) => g <= 1), 'difficile ' + grades.difficile);
+  assert.ok(grades.difficile.filter((g) => g === 1).length >= 9, 'difficile ' + grades.difficile);
+  // The grader agrees with a known hard puzzle that needs more than these steps.
+  const hard = '800000000003600000070090200050007000000045700000100030001000068008500010090000400'.split('').map(Number);
+  assert.strictEqual(Su.grade(hard), 2);
+});
+
 test('sudoku: harder levels show fewer numbers', () => {
   const avg = (level) => {
     let n = 0;

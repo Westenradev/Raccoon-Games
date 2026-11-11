@@ -8,10 +8,13 @@
   const U = isNode ? require('../core/util.js') : window.RA.modules.util;
   const A = isNode ? null : window.RA.audio;
 
+  // givens = numbers shown at the start. grade = the hardest step a player needs:
+  // 0 = only "single" steps (one place for a number, or one number for a place),
+  // 1 = also pairs and "locked" numbers. No level ever needs guessing.
   const LEVELS = {
-    facile: { label: 'Facile', givens: 42 },
-    medio: { label: 'Medio', givens: 33 },
-    difficile: { label: 'Difficile', givens: 26 },
+    facile: { label: 'Facile', givens: 42, grade: 0 },
+    medio: { label: 'Medio', givens: 32, grade: 0 },
+    difficile: { label: 'Difficile', givens: 27, grade: 1 },
   };
 
   // Board is a flat array of 81 numbers, 0 = empty.
@@ -80,25 +83,134 @@
     return b;
   }
 
-  // Makes a puzzle with the given number of starting numbers, unique solution.
-  function generatePuzzle(levelKey, rnd) {
-    const level = LEVELS[levelKey] || LEVELS.facile;
+  // ---------- Grading: how hard is a puzzle for a person? ----------
+  const UNITS = [];
+  for (let k = 0; k < 9; k++) {
+    const row = [];
+    const col = [];
+    const box = [];
+    for (let j = 0; j < 9; j++) {
+      row.push(k * 9 + j);
+      col.push(j * 9 + k);
+      box.push((Math.floor(k / 3) * 3 + Math.floor(j / 3)) * 9 + (k % 3) * 3 + (j % 3));
+    }
+    UNITS.push(row, col, box);
+  }
+  const bitCount = function (m) {
+    let n = 0;
+    while (m) { m &= m - 1; n += 1; }
+    return n;
+  };
+
+  // Solves with human steps only. Returns 0 (singles), 1 (pairs or locked numbers needed)
+  // or 2 (cannot be solved with these steps).
+  function grade(puzzle) {
+    const b = puzzle.slice();
+    const cand = new Array(81).fill(0);
+    for (let i = 0; i < 81; i++) {
+      if (b[i]) continue;
+      for (let v = 1; v <= 9; v++) if (canPlace(b, i, v)) cand[i] |= 1 << v;
+    }
+    const place = function (i, v) {
+      b[i] = v;
+      cand[i] = 0;
+      PEERS[i].forEach(function (p) { cand[p] &= ~(1 << v); });
+    };
+    const singles = function () {
+      let moved = false;
+      for (let i = 0; i < 81; i++) {
+        if (!b[i] && bitCount(cand[i]) === 1) {
+          place(i, Math.log2(cand[i]));
+          moved = true;
+        }
+      }
+      UNITS.forEach(function (unit) {
+        for (let v = 1; v <= 9; v++) {
+          const spots = unit.filter(function (i) { return cand[i] & (1 << v); });
+          if (spots.length === 1) {
+            place(spots[0], v);
+            moved = true;
+          }
+        }
+      });
+      return moved;
+    };
+    const harder = function () {
+      let changed = false;
+      const strip = function (cells, mask) {
+        cells.forEach(function (i) {
+          if (cand[i] & mask) {
+            cand[i] &= ~mask;
+            changed = true;
+          }
+        });
+      };
+      // Locked numbers: inside a unit, a number fits only in cells that also share another unit.
+      UNITS.forEach(function (unit) {
+        for (let v = 1; v <= 9; v++) {
+          const spots = unit.filter(function (i) { return cand[i] & (1 << v); });
+          if (spots.length < 2 || spots.length > 3) continue;
+          UNITS.forEach(function (other) {
+            if (other === unit || !spots.every(function (i) { return other.indexOf(i) >= 0; })) return;
+            strip(other.filter(function (i) { return spots.indexOf(i) < 0; }), 1 << v);
+          });
+        }
+      });
+      // Pairs: two cells of a unit with the same two numbers.
+      UNITS.forEach(function (unit) {
+        for (let x = 0; x < 9; x++) {
+          for (let y = x + 1; y < 9; y++) {
+            const m = cand[unit[x]];
+            if (m && m === cand[unit[y]] && bitCount(m) === 2) {
+              strip(unit.filter(function (i, k) { return k !== x && k !== y; }), m);
+            }
+          }
+        }
+      });
+      return changed;
+    };
+    let level = 0;
+    for (let guard = 0; guard < 400; guard++) {
+      if (b.every(function (v) { return v; })) return level;
+      if (singles()) continue;
+      if (!harder()) return 2;
+      level = 1;
+    }
+    return 2;
+  }
+
+  // One puzzle with a unique solution and at most `givens` numbers shown.
+  function carve(givens, rnd) {
     const solution = generateSolution(rnd);
     const puzzle = solution.slice();
-    const cells = U.shuffle(Array.from({ length: 81 }, (_, i) => i), rnd);
+    const cells = U.shuffle(Array.from({ length: 81 }, function (_, i) { return i; }), rnd);
     let filled = 81;
     for (const i of cells) {
-      if (filled <= level.givens) break;
+      if (filled <= givens) break;
       const keep = puzzle[i];
       puzzle[i] = 0;
-      const test = puzzle.slice();
-      if (countSolutions(test, 2, null) !== 1) {
-        puzzle[i] = keep;
-      } else {
-        filled -= 1;
-      }
+      if (countSolutions(puzzle.slice(), 2, null) !== 1) puzzle[i] = keep;
+      else filled -= 1;
     }
-    return { puzzle: puzzle, solution: solution, givens: puzzle.map((v) => v !== 0) };
+    return { puzzle: puzzle, solution: solution };
+  }
+
+  // Makes a puzzle for a level: unique solution, and the right kind of steps.
+  function generatePuzzle(levelKey, rnd) {
+    const level = LEVELS[levelKey] || LEVELS.facile;
+    let fallback = null;
+    for (let attempt = 0; attempt < 80; attempt++) {
+      const p = carve(level.givens, rnd);
+      const g = grade(p.puzzle);
+      if (g === level.grade) {
+        fallback = p;
+        break;
+      }
+      // Never keep a puzzle that needs guessing. An easier one is an acceptable spare.
+      if (g < level.grade && !fallback) fallback = p;
+    }
+    if (!fallback) fallback = carve(42, rnd);
+    return { puzzle: fallback.puzzle, solution: fallback.solution, givens: fallback.puzzle.map(function (v) { return v !== 0; }) };
   }
 
   function isSolved(board, solution) {
@@ -246,7 +358,6 @@
         }));
       });
       root.appendChild(levelButtons);
-      root.appendChild(grid);
 
       const counts = new Array(10).fill(0);
       board.forEach(function (v) { counts[v] += 1; });
@@ -257,14 +368,14 @@
           class: 'btn num' + (left === 0 ? ' done' : ''),
           title: 'Ne mancano ' + left,
           onclick: function () { setValue(v); },
-        }, String(v), U.el('small', { text: String(left) })));
+        }, String(v), U.el('small', { text: left === 0 ? 'fatto' : 'ancora ' + left })));
       }
-      pad.appendChild(U.el('button', { class: 'btn num erase', text: 'Canc', title: 'Cancella la casella', onclick: function () { setValue(0); } }));
-      root.appendChild(pad);
+      pad.appendChild(U.el('button', { class: 'btn num erase', text: 'Cancella', title: 'Cancella la casella', onclick: function () { setValue(0); } }));
+      root.appendChild(U.el('div', { class: 'sudoku-main' }, grid, pad));
 
       root.appendChild(U.el('div', { class: 'msg', text: won
         ? 'Bravo! Sudoku completato in ' + elapsed() + '.'
-        : 'Tocca una casella, poi un numero.' }));
+        : 'Tocca una casella, poi un numero. Puoi usare anche la tastiera.' }));
       root.appendChild(U.el('div', { class: 'actions' },
         U.el('button', { class: 'btn ghost', text: showErrors ? 'Nascondi gli errori' : 'Mostra gli errori', onclick: function () { showErrors = !showErrors; render(); } }),
         U.el('button', { class: 'btn ghost', text: 'Dammi un aiuto', onclick: hint }),
@@ -314,6 +425,7 @@
     mount: mount,
     LEVELS: LEVELS,
     generatePuzzle: generatePuzzle,
+    grade: grade,
     countSolutions: countSolutions,
     isSolved: isSolved,
     conflicts: conflicts,

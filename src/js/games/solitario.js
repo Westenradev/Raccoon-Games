@@ -171,8 +171,14 @@
       const dst = destinations(state, { type: 'waste' })[0];
       if (dst) return { src: { type: 'waste' }, dst: dst };
     }
-    if (state.stock.length || state.waste.length) return { draw: true };
-    return null;
+    // Turning cards from the stock helps only when one of those cards can go somewhere.
+    const hidden = state.stock.concat(state.waste);
+    const useful = hidden.some(function (slot) {
+      const c = slot.card;
+      if (canToFoundation(c, c.suit, state)) return true;
+      return state.tableau.some(function (col) { return canToTableau(c, col.length ? col[col.length - 1] : null); });
+    });
+    return useful ? { draw: true } : null;
   }
 
   // True when only final-pile moves are left: no hidden cards and nothing in stock or waste.
@@ -191,6 +197,8 @@
     let note = '';
     let won = false;
     let alive = true;
+    let autoRun = 0; // changes when a new game starts, so an old auto-finish stops
+    let lastMoveAt = 0;
     const timers = [];
     const root = U.el('div', { class: 'solitario game-panel tabletop' });
     container.appendChild(root);
@@ -201,6 +209,7 @@
     }
 
     function newGameNow() {
+      autoRun += 1;
       state = newGame(rnd);
       history = [];
       sel = null;
@@ -212,6 +221,7 @@
     }
 
     function undo() {
+      autoRun += 1;
       if (!history.length || won) return;
       state = JSON.parse(history.pop());
       sel = null;
@@ -230,6 +240,7 @@
       sel = null;
       hint = null;
       note = '';
+      lastMoveAt = Date.now();
       if (A) dst.type === 'found' ? A.sfx.ok() : A.sfx.place();
       if (isWon(state)) {
         won = true;
@@ -246,6 +257,8 @@
     // Click on a card: one destination moves at once, several let the player choose.
     function clickSource(src) {
       if (won) return;
+      // The second click of a double click must not move another card.
+      if (Date.now() - lastMoveAt < 350) return;
       if (sel && sameSrc(sel.src, src)) {
         sel = null;
         return render();
@@ -257,9 +270,10 @@
         if (A) A.sfx.bad();
         return render();
       }
-      if (dests.length === 1) return doMove(src, dests[0]);
+      // A card of a final pile never moves by itself: the player chooses where it goes.
+      if (dests.length === 1 && src.type !== 'found') return doMove(src, dests[0]);
       sel = { src: src, dests: dests };
-      note = 'Questa carta può andare in più posti. Tocca il posto che preferisci.';
+      note = dests.length === 1 ? 'Tocca la colonna illuminata per riportare giù la carta.' : 'Questa carta può andare in più posti. Tocca il posto che preferisci.';
       if (A) A.sfx.click();
       render();
     }
@@ -289,14 +303,15 @@
       sel = null;
       hint = h;
       if (!h) note = 'Non vedo altre mosse. Puoi annullare o iniziare una nuova partita.';
-      else if (h.draw) note = 'Prova a pescare una carta dal mazzo.';
+      else if (h.draw) note = 'Prova a girare una carta dal mazzo.';
       else note = 'Prova a spostare la carta illuminata.';
       render();
     }
 
     function autoFinish() {
+      const run = ++autoRun;
       const stepOnce = function () {
-        if (!alive || won) return;
+        if (!alive || won || run !== autoRun) return;
         const f = findFoundationMove(state);
         if (!f) return;
         doMove(f.src, f.dst);
@@ -358,9 +373,11 @@
       root.appendChild(top);
 
       // Cards overlap less when a column is long, so the table never needs to scroll.
-      const cw = parseFloat(getComputedStyle(root).getPropertyValue('--cw')) || 86;
-      const cardH = cw * 716 / 384;
-      const room = Math.max(cardH + 60, window.innerHeight - 56 - 150 - cardH - 150);
+      // The real size of a card on screen, and the height that is free for the columns.
+      const cardBox = stock.getBoundingClientRect();
+      const cw = cardBox.width || 86;
+      const cardH = cardBox.height || (cw * 716) / 384;
+      const room = Math.max(cardH + 60, window.innerHeight - cardBox.bottom - 190);
       const board = U.el('div', { class: 'sol-row tableau' });
       let tallest = 0;
       state.tableau.forEach(function (col, ci) {
@@ -370,7 +387,8 @@
         const downs = col.filter(function (c) { return !c.up; }).length;
         const ups = col.length - downs;
         const downStep = cw * 0.13;
-        const upStep = ups > 1 ? Math.min(cw * 0.4, (room - cardH - downs * downStep) / (ups - 1)) : 0;
+        // Never less than 24 px, so the value tag of every card stays readable.
+        const upStep = ups > 1 ? Math.max(24, Math.min(cw * 0.4, (room - cardH - downs * downStep) / (ups - 1))) : 0;
         let y = 0;
         col.forEach(function (slot, idx) {
           const src = { type: 'tab', col: ci, idx: idx };
@@ -431,8 +449,9 @@
       canvas.height = rootBox.height;
       root.appendChild(canvas);
       const g = canvas.getContext('2d');
-      const cw = parseFloat(getComputedStyle(root).getPropertyValue('--cw')) || 86;
-      const ch = cw * 716 / 384;
+      const sample = root.querySelector('[data-role="found-0"]').getBoundingClientRect();
+      const cw = sample.width || 86;
+      const ch = sample.height || (cw * 716) / 384;
       const queue = [];
       for (let rank = 10; rank >= 1; rank--) {
         for (let suit = 0; suit < 4; suit++) {
@@ -449,7 +468,7 @@
       const tick = function () {
         if (!alive || !canvas.isConnected) return;
         frame += 1;
-        if (frame % 9 === 1 && queue.length) {
+        if (frame % 5 === 1 && queue.length) {
           const c = queue.shift();
           c.vx = (Math.random() < 0.5 ? -1 : 1) * (2 + Math.random() * 4);
           c.vy = -Math.random() * 6;
@@ -467,29 +486,37 @@
           if (c.img.complete) g.drawImage(c.img, c.x, c.y, cw, ch);
           if (c.x < -cw || c.x > canvas.width) flying.splice(i, 1);
         }
-        if ((!queue.length && !flying.length) || Date.now() - startedAt > 12000) {
+        if ((!queue.length && !flying.length) || Date.now() - startedAt > 8000) {
+          skip.remove();
           canvas.remove();
           return winCard();
         }
         requestAnimationFrame(tick);
       };
+      const skip = U.el('div', { class: 'cascade-skip', text: 'Tocca per saltare' });
+      root.appendChild(skip);
       canvas.style.pointerEvents = 'auto';
       canvas.addEventListener('click', function () {
+        skip.remove();
         canvas.remove();
         winCard();
       });
       requestAnimationFrame(tick);
     }
 
+    // The spacing of the columns depends on the window height.
+    const onResize = function () { if (alive && !celebrated) render(); };
+    window.addEventListener('resize', onResize);
     render();
     return {
       destroy: function () {
         alive = false;
+        window.removeEventListener('resize', onResize);
         timers.forEach(clearTimeout);
       },
       debug: {
         get state() { return state; },
-        set state(s) { state = s; history = []; sel = null; won = isWon(s); celebrated = false; render(); },
+        set state(s) { autoRun += 1; state = s; history = []; sel = null; won = isWon(s); celebrated = false; render(); },
         get won() { return won; },
         findHint: function () { return findHint(state); },
       },

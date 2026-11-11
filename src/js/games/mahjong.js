@@ -193,7 +193,7 @@
   };
 
   function label(text) {
-    return '<text x="5" y="13" font-family="Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#6b6253">' + text + '</text>';
+    return '<text x="4" y="14" font-family="Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#5a5143">' + text + '</text>';
   }
 
   function glyph(ch, y, size, color) {
@@ -248,7 +248,7 @@
   const HH = 40; // half tile height in px
   const LX = -6; // shift of each higher layer
   const LY = -7;
-  const PAD = 34;
+  const PAD = 16;
   const BOARD_W = 30 * HW + PAD * 2;
   const BOARD_H = 16 * HH + PAD * 2;
 
@@ -359,16 +359,24 @@
       render();
     }
 
+    // Mixes the faces of the tiles that are left. When the shape itself cannot be cleared
+    // (for example the last two tiles lie one on the other), it first takes back moves
+    // until the board can be cleared again.
     function shuffleTiles() {
       if (endedAt || !tiles.length) return;
-      history = [];
-      if (reshuffle(tiles, rnd)) {
-        note = 'Tessere mescolate.';
-        afterChange();
-      } else {
-        selected = null;
-        stuck = true;
-        note = 'Queste tessere non si possono più liberare. Inizia una nuova partita.';
+      let undone = 0;
+      while (!reshuffle(tiles, rnd) && history.length) {
+        tiles = tiles.concat(history.pop());
+        score = Math.max(0, score - 10);
+        undone += 1;
+      }
+      note = undone
+        ? 'Le ultime tessere erano una sopra l\'altra. Ho rimesso ' + undone + (undone === 1 ? ' coppia' : ' coppie') + ' sul tavolo e mescolato.'
+        : 'Tessere mescolate.';
+      const keep = note;
+      afterChange();
+      if (!stuck) {
+        note = keep;
         render();
       }
     }
@@ -377,7 +385,7 @@
       const wrap = root.querySelector('.mj-wrap');
       const board = root.querySelector('.mj-board');
       if (!wrap || !board) return;
-      const availH = Math.max(300, window.innerHeight - 56 - 250);
+      const availH = Math.max(300, window.innerHeight - 56 - 176);
       const scale = Math.min(1.25, wrap.clientWidth / BOARD_W, availH / BOARD_H);
       board.style.transform = 'scale(' + scale + ')';
       board.style.marginLeft = (-BOARD_W / 2) + 'px';
@@ -387,11 +395,16 @@
     function render() {
       if (!alive) return;
       root.innerHTML = '';
-      root.appendChild(U.el('div', { class: 'pill-row' },
+      // One row at the top: title, numbers and buttons. This leaves more room for the tiles.
+      root.appendChild(U.el('div', { class: 'pill-row mj-bar' },
         U.el('div', { class: 'mj-title', text: 'Mahjong' }),
-        U.el('div', { class: 'pill', text: 'Coppie rimaste: ' + tiles.length / 2 }),
+        U.el('div', { class: 'pill', text: 'Coppie: ' + tiles.length / 2 }),
         U.el('div', { class: 'pill', text: 'Punti: ' + score }),
-        U.el('div', { class: 'pill' }, 'Tempo ', U.el('span', { class: 'clock', text: elapsed() }))));
+        U.el('div', { class: 'pill' }, 'Tempo ', U.el('span', { class: 'clock', text: elapsed() })),
+        U.el('button', { class: 'btn', text: 'Suggerimento', onclick: hint }),
+        U.el('button', { class: 'btn', text: 'Annulla mossa', onclick: undo }),
+        U.el('button', { class: 'btn' + (stuck ? ' pulse' : ''), text: 'Mescola', onclick: shuffleTiles }),
+        U.el('button', { class: 'btn ghost', text: 'Nuova partita', onclick: newGame })));
 
       const board = U.el('div', { class: 'mj-board', style: 'width:' + BOARD_W + 'px;height:' + BOARD_H + 'px' });
       const free = new Set(freeTiles(tiles));
@@ -411,12 +424,6 @@
       root.appendChild(U.el('div', { class: 'mj-wrap' }, board));
 
       root.appendChild(U.el('div', { class: 'msg', text: note || 'Tocca due tessere uguali e libere. Tutti i fiori fanno coppia tra loro, e così le stagioni.' }));
-      root.appendChild(U.el('div', { class: 'actions' },
-        U.el('button', { class: 'btn', text: 'Suggerimento', onclick: hint }),
-        U.el('button', { class: 'btn', text: 'Annulla mossa', onclick: undo }),
-        U.el('button', { class: 'btn' + (stuck ? ' pulse' : ''), text: 'Mescola', onclick: shuffleTiles }),
-        U.el('button', { class: 'btn ghost', text: 'Nuova partita', onclick: newGame })));
-
       if (endedAt) {
         root.appendChild(U.el('div', { class: 'overlay' }, U.el('div', { class: 'card-box' },
           U.el('h2', { text: 'Tavolo pulito!' }),
