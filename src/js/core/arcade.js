@@ -37,11 +37,11 @@
 
   // Keyboard state. Keys are lower-case names like 'arrowleft', ' ', 'a'.
   const down = {};
-  const tapped = {}; // keys pressed since the last read, so a very short tap still counts
+  const tapped = {}; // time of the last press of each key, so a very short tap still counts
   const listeners = [];
   function releaseAll() {
     Object.keys(down).forEach(function (k) { down[k] = false; });
-    Object.keys(tapped).forEach(function (k) { tapped[k] = false; });
+    Object.keys(tapped).forEach(function (k) { tapped[k] = 0; });
   }
   function onKeyDown(e) {
     if (e.metaKey || e.ctrlKey || e.altKey) {
@@ -53,7 +53,7 @@
     if (GAME_KEYS.indexOf(k) >= 0) e.preventDefault();
     if (down[k]) return; // ignore keyboard auto-repeat
     down[k] = true;
-    tapped[k] = true;
+    tapped[k] = performance.now();
     listeners.slice().forEach(function (fn) { fn(k, true); });
   }
   function onKeyUp(e) {
@@ -86,9 +86,11 @@
   }
   // Left/right/up/down/fire from arrows, WASD, or Space.
   function dirInput() {
+    // A tap counts once, and only if it was a moment ago: an old press must not act later.
+    const now = performance.now();
     const on = function (k) {
-      const v = !!down[k] || !!tapped[k];
-      tapped[k] = false;
+      const v = !!down[k] || (!!tapped[k] && now - tapped[k] < 150);
+      tapped[k] = 0;
       return v;
     };
     return {

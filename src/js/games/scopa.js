@@ -236,7 +236,6 @@
     let choosing = null; // { cardId, opts } when the player must pick one of several captures
     let preview = null; // { card, takeIds } while the CPU shows its move
     let note = '';
-    let roundStartedAt = 0;
     const root = U.el('div', { class: 'scopa game-panel tabletop' });
     container.appendChild(root);
 
@@ -255,7 +254,6 @@
     }
 
     function startNewRound() {
-      roundStartedAt = Date.now();
       state = startRound(match, rnd);
       choosing = null;
       preview = null;
@@ -302,10 +300,10 @@
       nextTurn();
     }
 
-    function clickHand(card) {
+    function clickHand(card, e) {
       if (busy || state.ended || state.turn !== HUMAN) return;
-      // The second click of a double click on "Prossima mano" must not play a card.
-      if (Date.now() - roundStartedAt < 500) return;
+      // The second click of a double click (for example on "Prossima mano") must not play a card.
+      if (e && e.detail > 1) return;
       const opts = captureOptions(state.table, card.rank);
       if (opts.length <= 1) return humanPlay(card.id, opts[0] || []);
       choosing = { cardId: card.id, opts: opts };
@@ -414,7 +412,7 @@
         handRow.appendChild(D.cardEl(c, {
           selected: !!choosing && choosing.cardId === c.id,
           disabled: !myTurn,
-          onclick: function () { clickHand(c); },
+          onclick: function (e) { clickHand(c, e); },
         }));
       });
       root.appendChild(U.el('div', { class: 'seat-row' },

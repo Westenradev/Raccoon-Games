@@ -198,7 +198,6 @@
     let won = false;
     let alive = true;
     let autoRun = 0; // changes when a new game starts, so an old auto-finish stops
-    let lastMoveAt = 0;
     const timers = [];
     const root = U.el('div', { class: 'solitario game-panel tabletop' });
     container.appendChild(root);
@@ -240,7 +239,6 @@
       sel = null;
       hint = null;
       note = '';
-      lastMoveAt = Date.now();
       if (A) dst.type === 'found' ? A.sfx.ok() : A.sfx.place();
       if (isWon(state)) {
         won = true;
@@ -255,10 +253,10 @@
     }
 
     // Click on a card: one destination moves at once, several let the player choose.
-    function clickSource(src) {
+    function clickSource(src, e) {
       if (won) return;
       // The second click of a double click must not move another card.
-      if (Date.now() - lastMoveAt < 350) return;
+      if (e && e.detail > 1) return;
       if (sel && sameSrc(sel.src, src)) {
         sel = null;
         return render();
@@ -344,7 +342,7 @@
 
       const wasteTop = state.waste.length ? state.waste[state.waste.length - 1].card : null;
       const waste = wasteTop
-        ? tagged(D.cardEl(wasteTop, { selected: !!sel && sel.src.type === 'waste', onclick: function () { clickSource({ type: 'waste' }); } }), wasteTop)
+        ? tagged(D.cardEl(wasteTop, { selected: !!sel && sel.src.type === 'waste', onclick: function (e) { clickSource({ type: 'waste' }, e); } }), wasteTop)
         : U.el('div', { class: 'pcard empty' });
       if (hint && hint.src && hint.src.type === 'waste') waste.classList.add('hinted');
       waste.setAttribute('data-role', 'waste');
@@ -354,9 +352,9 @@
       state.foundation.forEach(function (pile, suit) {
         const dst = { type: 'found', suit: suit };
         const topCard = pile.length ? pile[pile.length - 1] : null;
-        const onclick = function () {
+        const onclick = function (e) {
           if (clickDest(dst)) return;
-          if (topCard) clickSource({ type: 'found', suit: suit });
+          if (topCard) clickSource({ type: 'found', suit: suit }, e);
         };
         let node;
         if (topCard) {
@@ -399,7 +397,7 @@
               onclick: function (e) {
                 e.stopPropagation();
                 if (clickDest(dst)) return;
-                clickSource(src);
+                clickSource(src, e);
               },
             }), slot.card)
             : D.cardEl(null, { hidden: true });
