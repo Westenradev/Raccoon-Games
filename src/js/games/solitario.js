@@ -178,7 +178,55 @@
       if (canToFoundation(c, c.suit, state)) return true;
       return state.tableau.some(function (col) { return canToTableau(c, col.length ? col[col.length - 1] : null); });
     });
-    return useful ? { draw: true } : null;
+    if (useful) return { draw: true };
+    return lookAhead(state);
+  }
+
+  // Every move between columns and to the final piles, from any face-up card.
+  function tableMoves(state) {
+    const out = [];
+    state.tableau.forEach(function (col, ci) {
+      col.forEach(function (slot, idx) {
+        if (!slot.up) return;
+        const src = { type: 'tab', col: ci, idx: idx };
+        destinations(state, src).forEach(function (dst) { out.push({ src: src, dst: dst }); });
+      });
+    });
+    if (state.waste.length) {
+      destinations(state, { type: 'waste' }).forEach(function (dst) { out.push({ src: { type: 'waste' }, dst: dst }); });
+    }
+    return out;
+  }
+
+  // Looks a few moves ahead for a way to turn a card over or to fill a final pile.
+  // Returns the first move of the shortest way, or null.
+  function lookAhead(state) {
+    const value = function (s) {
+      let hidden = 0;
+      s.tableau.forEach(function (col) { col.forEach(function (slot) { if (!slot.up) hidden += 1; }); });
+      return s.foundation.reduce(function (n, p) { return n + p.length; }, 0) - hidden;
+    };
+    const base = value(state);
+    let layer = [{ state: state, first: null }];
+    const seen = {};
+    for (let depth = 0; depth < 4; depth++) {
+      const next = [];
+      for (const node of layer) {
+        for (const mv of tableMoves(node.state)) {
+          const copy = JSON.parse(JSON.stringify(node.state));
+          if (!move(copy, mv.src, mv.dst).ok) continue;
+          const first = node.first || mv;
+          if (value(copy) > base) return first;
+          const k = JSON.stringify([copy.tableau, copy.waste.length, copy.foundation]);
+          if (seen[k]) continue;
+          seen[k] = true;
+          next.push({ state: copy, first: first });
+        }
+      }
+      if (!next.length || next.length > 400) break;
+      layer = next;
+    }
+    return null;
   }
 
   // True when only final-pile moves are left: no hidden cards and nothing in stock or waste.
@@ -259,6 +307,7 @@
       if (e && e.detail > 1) return;
       if (sel && sameSrc(sel.src, src)) {
         sel = null;
+        note = '';
         return render();
       }
       const dests = destinations(state, src);

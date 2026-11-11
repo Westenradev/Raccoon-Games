@@ -425,8 +425,21 @@ async function scopaHumanTurn(tr) {
     }
   } else {
     // A double click opens the choice like one click: it must not play anything.
-    if (rnd() < 0.4) { await loc.dblclick(); stats.scopa.doubleClicks += 1; } else await loc.click();
+    // With three or more captures the buttons take two rows, so the double click is always tried there.
+    const openDbl = ch.opts.length >= 3 || rnd() < 0.4;
+    if (openDbl) { await loc.dblclick(); stats.scopa.doubleClicks += 1; } else await loc.click();
     let c = await scopaSnap();
+    let accidental = false;
+    if (openDbl) {
+      accidental = J(c.state) !== J(pre.state);
+      check(!accidental && c.dom.buttons.length > 0, 'scopa: a double click on a hand card with several captures opens the choice and does nothing else',
+        () => ({ card: cardName(ch.card), captures: ch.opts.length, choiceStillOpen: c.dom.buttons.length > 0, playedByTheSecondClick: accidental ? c.state.last.taken.map(cardName) : null, message: c.dom.msg }));
+      if (!accidental && !c.dom.buttons.length) { await loc.click(); c = await scopaSnap(); }
+    }
+    if (accidental) {
+      // The second click pressed a capture button. Go on with the capture the game made.
+      take = ids(c.state.last.taken);
+    } else {
     scopaInvariants(c, 'choosing');
     check(J(c.state) === J(pre.state), 'scopa: nothing is played before the capture is chosen');
     const optCards = ch.opts.map((o) => st.table.filter((x) => o.indexOf(x.id) >= 0));
@@ -467,6 +480,7 @@ async function scopaHumanTurn(tr) {
       await page.locator('.scopa .actions button').nth(idx[k]).click();
     }
     stats.scopa.multiChoice += 1;
+    }
   }
   const post = await scopaSnap();
   if (lastPlay) {

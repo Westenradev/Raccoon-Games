@@ -217,6 +217,12 @@ async function standsStill(page, ms) {
   const b = await page.evaluate(frozenSig);
   return { still: a === b, shown: shown, sig: b };
 }
+// Bolle stands still by itself until a bubble is fired, so there "resumed" means: the next
+// frames no longer draw the pause text.
+async function resumed(page) {
+  await page.waitForTimeout(150);
+  return !(await pausedNow(page));
+}
 async function runsAgain(page) {
   const a = await page.evaluate(frozenSig);
   for (let i = 0; i < 15; i++) {
@@ -1632,12 +1638,12 @@ async function scenarioShell(browser) {
     const sigKeys = await page.evaluate(frozenSig);
     check(id + ': game keys do nothing while paused', sigKeys === st.sig, st.sig + ' / ' + sigKeys);
     await page.keyboard.press('P'); // capital letter
-    check(id + ': P again resumes the game', id === 'bubbles' ? !(await pausedNow(page)) : await runsAgain(page));
+    check(id + ': P again resumes the game', id === 'bubbles' ? await resumed(page) : await runsAgain(page));
     await page.evaluate(() => window.dispatchEvent(new Event('blur')));
     st = await standsStill(page, 400);
     check(id + ': the game pauses by itself when the window loses focus', st.still && st.shown);
     await page.keyboard.press('p');
-    check(id + ': P resumes after a lost focus', id === 'bubbles' ? !(await pausedNow(page)) : await runsAgain(page));
+    check(id + ': P resumes after a lost focus', id === 'bubbles' ? await resumed(page) : await runsAgain(page));
     await page.evaluate(() => {
       Object.defineProperty(document, 'hidden', { get: function () { return true; }, configurable: true });
       document.dispatchEvent(new Event('visibilitychange'));
@@ -1646,7 +1652,7 @@ async function scenarioShell(browser) {
     st = await standsStill(page, 400);
     check(id + ': the game pauses by itself when the window is hidden', st.still && st.shown);
     await page.keyboard.press('p');
-    check(id + ': P resumes after the window was hidden', id === 'bubbles' ? !(await pausedNow(page)) : await runsAgain(page));
+    check(id + ': P resumes after the window was hidden', id === 'bubbles' ? await resumed(page) : await runsAgain(page));
     // Make some points, leave with Esc: the record must be saved and shown next time.
     const scoreNow = () => page.evaluate(() => window.RA.current.debug.state.score);
     if (id === 'tetris') {

@@ -224,3 +224,46 @@ test('solitario: 300 games played with the hint engine stay consistent, and some
   }
   assert.ok(wins >= 10, 'a simple player should win some games: ' + wins + '/300');
 });
+
+test('solitario: the hint looks ahead and finds a move from the middle of a column', () => {
+  const up = (suit, rank) => ({ card: card(rank, suit), up: true });
+  const down = (suit, rank) => ({ card: card(rank, suit), up: false });
+  const pile = (suit, n) => Array.from({ length: n }, (_, i) => card(i + 1, suit));
+  // Final piles: 5 Coppe, 8 Denari, 8 Spade, 5 Bastoni. Suits: 0 Coppe, 1 Denari, 2 Spade, 3 Bastoni.
+  const g = {
+    stock: [], waste: [], moves: 0,
+    foundation: [pile(0, 5), pile(1, 8), pile(2, 8), pile(3, 5)],
+    tableau: [
+      [up(1, 10), up(3, 9)],
+      [up(3, 10), up(1, 9), up(3, 8), up(0, 7)],
+      [up(2, 10), up(0, 9)],
+      [down(0, 6), down(3, 6), down(0, 10), up(2, 9), up(0, 8), up(3, 7)],
+      [], [], [],
+    ],
+  };
+  const h = Sol.findHint(g);
+  assert.ok(h && h.src, 'a move is suggested');
+  assert.ok(Sol.move(g, h.src, h.dst).ok, 'the suggested move is legal');
+});
+
+test('scopa: the cards left on the table at the end of a hand are remembered', () => {
+  const m = S.newMatch();
+  const st = S.startRound(m, U.makeRng(4));
+  st.deck = [];
+  st.table = [card(5, 0), card(2, 2)];
+  st.hands = [[card(9, 1)], []];
+  st.turn = S.HUMAN;
+  st.lastTaker = S.CPU;
+  assert.ok(S.play(st, S.HUMAN, 18, []).ok);
+  assert.ok(st.ended);
+  assert.strictEqual(st.swept.length, 3);
+  assert.strictEqual(st.table.length, 0);
+  assert.strictEqual(st.captured[S.CPU].length, 3);
+});
+
+test('scopa: a deal never has three or more Re on the table', () => {
+  for (let seed = 1; seed <= 3000; seed++) {
+    const st = S.startRound(S.newMatch(), U.makeRng(seed));
+    assert.ok(st.table.filter((c) => c.rank === 10).length < 3, 'seed ' + seed);
+  }
+});

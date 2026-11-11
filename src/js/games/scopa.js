@@ -135,6 +135,8 @@
 
   // Gives the cards left on the table to the last taker and scores the round.
   function endRound(state) {
+    // swept = the cards that were still on the table, kept so they can be shown once more.
+    state.swept = state.table.slice();
     if (state.lastTaker !== null && state.table.length) {
       state.captured[state.lastTaker] = state.captured[state.lastTaker].concat(state.table);
       state.table = [];
@@ -316,7 +318,10 @@
     function roundEnd() {
       const over = closeRound(match, state);
       busy = true;
-      note = describe(state.last) + ' Mano finita: le carte rimaste vanno a chi ha preso per ultimo.';
+      const left = state.swept ? state.swept.length : 0;
+      note = describe(state.last) + (left && state.lastTaker !== null
+        ? ' Mano finita: ' + (left === 1 ? 'la carta rimasta va' : 'le ' + left + ' carte rimaste vanno') + (state.lastTaker === HUMAN ? ' a te.' : ' all\'avversario.')
+        : ' Mano finita.');
       render();
       later(function () { showRoundResult(over); }, 1500);
     }
@@ -378,7 +383,9 @@
 
       const tableRow = U.el('div', { class: 'felt' });
       const marked = preview ? preview.takeIds : (choosing ? [].concat.apply([], choosing.opts) : []);
-      state.table.forEach(function (c) {
+      // At the end of a hand the cards left on the table stay visible until the points appear.
+      const shown = state.ended && state.swept ? state.swept : state.table;
+      shown.forEach(function (c) {
         // While a capture is being chosen, a table card that is part of only one capture picks it.
         const mine = choosing && myTurn ? choosing.opts.filter(function (o) { return o.indexOf(c.id) >= 0; }) : [];
         tableRow.appendChild(D.cardEl(c, {
@@ -392,7 +399,7 @@
         played.classList.add('played');
         tableRow.appendChild(played);
       }
-      if (!state.table.length && !preview) tableRow.appendChild(U.el('span', { class: 'felt-note', text: 'Il tavolo è vuoto' }));
+      if (!shown.length && !preview) tableRow.appendChild(U.el('span', { class: 'felt-note', text: 'Il tavolo è vuoto' }));
       root.appendChild(tableRow);
 
       root.appendChild(U.el('div', { class: 'msg', text: note }));
@@ -401,9 +408,10 @@
         const optRow = U.el('div', { class: 'actions' });
         choosing.opts.forEach(function (o) {
           const cards = state.table.filter(function (c) { return o.indexOf(c.id) >= 0; });
-          optRow.appendChild(U.el('button', { class: 'btn', text: 'Prendi ' + names(cards), onclick: function () { humanPlay(choosing.cardId, o); } }));
+          // A double click on the hand card must not also press a button that appears under it.
+          optRow.appendChild(U.el('button', { class: 'btn', text: 'Prendi ' + names(cards), onclick: function (e) { if (e.detail <= 1) humanPlay(choosing.cardId, o); } }));
         });
-        optRow.appendChild(U.el('button', { class: 'btn ghost', text: 'Annulla', onclick: function () { choosing = null; note = 'Scegli una carta dalla tua mano.'; render(); } }));
+        optRow.appendChild(U.el('button', { class: 'btn ghost', text: 'Annulla', onclick: function (e) { if (e.detail > 1) return; choosing = null; note = 'Scegli una carta dalla tua mano.'; render(); } }));
         root.appendChild(optRow);
       }
 
