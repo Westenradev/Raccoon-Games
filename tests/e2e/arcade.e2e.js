@@ -1229,10 +1229,15 @@ async function scenarioBubbles(browser) {
   await page.mouse.up();
   const afterMouse = await page.evaluate(frozenSig);
   check('the mouse does not aim or fire while paused', afterMouse === st.sig, st.sig + ' / ' + afterMouse);
+  // A click on the game ends the pause (for players who use only the mouse), without firing.
+  await page.waitForTimeout(120);
+  check('a click on the game ends the pause', !(await pausedNow(page)));
+  await page.keyboard.press('p');
+  await page.waitForTimeout(120);
   await page.keyboard.press(' ', { delay: 40 });
   await page.keyboard.press('ArrowLeft', { delay: 60 });
   const afterKeys = await page.evaluate(frozenSig);
-  check.known('P1', 'Space and the arrows do nothing while Bolle is paused', afterKeys === afterMouse, afterMouse + ' / ' + afterKeys);
+  check('Space and the arrows do nothing while Bolle is paused', afterKeys === afterMouse, afterMouse + ' / ' + afterKeys);
   await page.keyboard.press('p');
   await page.waitForTimeout(120);
   check('P resumes Bolle', !(await pausedNow(page)));
@@ -1625,14 +1630,14 @@ async function scenarioShell(browser) {
     if (id === 'bubbles') { await page.keyboard.press('ArrowLeft', { delay: 80 }); await page.keyboard.press(' ', { delay: 40 }); }
     await page.waitForTimeout(80);
     const sigKeys = await page.evaluate(frozenSig);
-    (id === 'bubbles' ? (n, ok, d) => check.known('P1', n, ok, d) : check)(id + ': game keys do nothing while paused', sigKeys === st.sig, st.sig + ' / ' + sigKeys);
+    check(id + ': game keys do nothing while paused', sigKeys === st.sig, st.sig + ' / ' + sigKeys);
     await page.keyboard.press('P'); // capital letter
-    check(id + ': P again resumes the game', await runsAgain(page));
+    check(id + ': P again resumes the game', id === 'bubbles' ? !(await pausedNow(page)) : await runsAgain(page));
     await page.evaluate(() => window.dispatchEvent(new Event('blur')));
     st = await standsStill(page, 400);
     check(id + ': the game pauses by itself when the window loses focus', st.still && st.shown);
     await page.keyboard.press('p');
-    check(id + ': P resumes after a lost focus', await runsAgain(page));
+    check(id + ': P resumes after a lost focus', id === 'bubbles' ? !(await pausedNow(page)) : await runsAgain(page));
     await page.evaluate(() => {
       Object.defineProperty(document, 'hidden', { get: function () { return true; }, configurable: true });
       document.dispatchEvent(new Event('visibilitychange'));
@@ -1641,7 +1646,7 @@ async function scenarioShell(browser) {
     st = await standsStill(page, 400);
     check(id + ': the game pauses by itself when the window is hidden', st.still && st.shown);
     await page.keyboard.press('p');
-    check(id + ': P resumes after the window was hidden', await runsAgain(page));
+    check(id + ': P resumes after the window was hidden', id === 'bubbles' ? !(await pausedNow(page)) : await runsAgain(page));
     // Make some points, leave with Esc: the record must be saved and shown next time.
     const scoreNow = () => page.evaluate(() => window.RA.current.debug.state.score);
     if (id === 'tetris') {
