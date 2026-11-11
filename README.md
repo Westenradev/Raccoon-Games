@@ -35,6 +35,8 @@ I file pronti si scaricano dalla pagina **Actions** del repository su GitHub. Ap
 
 Il file giusto è il `.dmg` creato da GitHub (pacchetto **RaccoonArcade-mac-arm64**). Viene costruito e firmato su un Mac vero.
 
+Il job **Mac (Apple Silicon)** usa un computer Mac di GitHub. Se in Actions compare **annullato** dopo un secondo, GitHub non ha dato il computer Mac. Di solito dipende dall'account: i minuti Mac sono gratuiti solo nei repository pubblici. In un repository privato contano come minuti a pagamento e serve un limite di spesa sopra zero in **Settings → Billing**. Senza il job Mac non esiste un `.dmg` firmato. Si può creare il `.dmg` anche su un Mac con `npm run build:mac`.
+
 1. Apri il file `.dmg`.
 2. Trascina **Raccoon Arcade** nella cartella **Applicazioni**.
 3. Apri **Raccoon Arcade**. La prima volta il Mac può dire che non può controllare l'app. Questo succede perché l'app non ha la firma a pagamento di Apple. Per aprirla senza usare il Terminale:
