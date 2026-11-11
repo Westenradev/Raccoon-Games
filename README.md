@@ -51,10 +51,16 @@ Avvia l'app in una finestra:
 npm start
 ```
 
-Esegui i test delle regole (45 test, con bot che giocano partite intere):
+Esegui i test delle regole (50 test, con bot che giocano partite intere):
 
 ```bash
 npm test
+```
+
+Esegui le prove nel browser: giocano tutti i giochi con clic e tasti veri. Durano circa 10 minuti e richiedono Playwright:
+
+```bash
+npm run test:e2e
 ```
 
 Salva una immagine di ogni gioco a partita in corso (serve Playwright):
@@ -86,3 +92,5 @@ Il file finale finisce nella cartella `dist/`.
 - Menu: clicca un gioco. Il pulsante **Menu** torna al menu. Il tasto **Esc** fa lo stesso.
 - Suono: il pulsante **Suono** accende o spegne i suoni.
 - Nei giochi della sala giochi si usano le frecce e la barra spaziatrice. Il tasto Invio avvia la partita.
+- Il tasto **P** mette in pausa. Il gioco va in pausa da solo quando si passa a un'altra finestra.
+- I record si salvano appena vengono battuti.
