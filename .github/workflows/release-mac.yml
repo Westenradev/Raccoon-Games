@@ -1,0 +1,74 @@
+name: Release Mac zip
+
+# Run by hand: Actions -> Release Mac zip -> Run workflow.
+# It builds the Mac app on Linux, signs it "ad hoc" (no Apple account) and
+# attaches the zip to a new GitHub Release.
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: Title of the release
+        default: Mac test1
+      tag:
+        description: Tag of the release
+        default: mac-test1
+
+permissions:
+  contents: write
+
+jobs:
+  mac-zip:
+    name: Mac zip (Apple Silicon)
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TITLE: ${{ inputs.title }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci || npm install
+      - name: Run logic tests
+        run: npm test
+      - name: Build the Mac app
+        run: npx electron-builder --mac zip --arm64 --publish never
+      - name: Restore the signing tool
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo-rcodesign
+          key: rcodesign-0.29.0-${{ runner.os }}
+      - name: Install the signing tool (rcodesign)
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: cargo install apple-codesign --version 0.29.0 --locked --root ~/.cargo-rcodesign
+      - name: Sign the app ad hoc and make the zip
+        run: |
+          mkdir -p out/signed
+          ~/.cargo-rcodesign/bin/rcodesign sign "dist/mac-arm64/Raccoon Arcade.app" "out/signed/Raccoon Arcade.app"
+          VERSION=$(node -p "require('./package.json').version")
+          (cd out/signed && zip -qry "../RaccoonArcade-${VERSION}-mac-arm64-signed.zip" "Raccoon Arcade.app")
+          ls -la out
+      - name: Write the release notes
+        run: |
+          cat > out/notes.md <<'NOTES'
+          Raccoon Arcade per Mac con processore Apple Silicon (M1, M2, M3, M4).
+
+          1. Scarica il file `.zip` e scompattalo.
+          2. Sposta **Raccoon Arcade** nella cartella **Applicazioni**.
+          3. Aprila. Se il Mac mostra un avviso, fai clic con il tasto destro sull'app e scegli **Apri**.
+          4. Su macOS 15 e successivi: **Impostazioni di Sistema**, poi **Privacy e sicurezza**, poi **Apri comunque**.
+
+          L'app ha una firma "ad hoc", non una firma a pagamento di Apple. Questa è una versione di prova: non è ancora stata provata su un Mac vero.
+          Se il Mac dice che l'app è "danneggiata", vedi i comandi nel file README.
+          NOTES
+      - name: Create the release
+        run: |
+          gh release create "$RELEASE_TAG" out/*.zip \
+            --title "$RELEASE_TITLE" \
+            --notes-file out/notes.md \
+            --prerelease \
+            --target "$GITHUB_SHA"

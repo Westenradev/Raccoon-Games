@@ -8,6 +8,8 @@ on:
 jobs:
   mac:
     name: Mac (Apple Silicon)
+    # GitHub has not given this job a Mac so far. Run it by hand to try again.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
