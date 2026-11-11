@@ -158,6 +158,10 @@ body.arcade-mode #topbar { background: #0c0c10; border-bottom-color: #2a2a35; }
 .tile:hover { transform: translateY(-4px); }
 .tile .thumb {
   position: relative;
+  /* Older Chromium (Electron 33) shrinks a block inside a flex button: ask for the full width. */
+  align-self: stretch;
+  width: 100%;
+  box-sizing: border-box;
   height: 170px;
   overflow: hidden;
   border-radius: 10px;

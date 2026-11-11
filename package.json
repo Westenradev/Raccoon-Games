@@ -2,7 +2,7 @@
   "name": "raccoon-arcade",
   "productName": "Raccoon Arcade",
   "version": "1.0.0",
-  "description": "Raccoon Arcade: giochi a tema procione per Mac (Apple Silicon).",
+  "description": "Raccoon Arcade: undici giochi per Mac (Apple Silicon) e Linux.",
   "main": "main.js",
   "private": true,
   "license": "UNLICENSED",
@@ -11,7 +11,9 @@
     "test": "node --test tests/*.test.js",
     "test:e2e": "node tests/e2e/run-all.js",
     "screenshots": "node tests/e2e/screenshots.js",
-    "build:mac": "electron-builder --mac dmg --arm64"
+    "build:mac": "electron-builder --mac dmg zip --arm64",
+    "build:mac-zip": "electron-builder --mac zip --arm64",
+    "build:linux": "electron-builder --linux AppImage tar.gz --x64"
   },
   "devDependencies": {
     "electron": "^33.2.0",
@@ -30,8 +32,19 @@
     "mac": {
       "category": "public.app-category.games",
       "target": [
-        "dmg"
+        "dmg",
+        "zip"
       ]
+    },
+    "artifactName": "RaccoonArcade-${version}-${os}-${arch}.${ext}",
+    "linux": {
+      "category": "Game",
+      "target": [
+        "AppImage",
+        "tar.gz"
+      ],
+      "synopsis": "Undici giochi da tavolo e da sala giochi"
     }
-  }
+  },
+  "author": "Raccoon Arcade"
 }

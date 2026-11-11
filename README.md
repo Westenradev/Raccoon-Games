@@ -1,6 +1,6 @@
 # Raccoon Arcade
 
-Raccoon Arcade è una raccolta di undici giochi per Mac con processore Apple Silicon (M1, M2, M3, M4).
+Raccoon Arcade è una raccolta di undici giochi per Mac con processore Apple Silicon (M1, M2, M3, M4) e per Linux a 64 bit.
 
 ## Giochi
 
@@ -27,15 +27,60 @@ Sala giochi:
 
 Le fonti delle immagini e dei caratteri sono in [CREDITS.md](CREDITS.md).
 
-## Installazione su Mac M1 (per l'utente finale)
+## Installazione
 
-1. Apri la pagina **Actions** del repository su GitHub.
-2. Apri l'ultima esecuzione riuscita di **Build Raccoon Arcade (Mac M1)**.
-3. Scarica il file **RaccoonArcade-arm64** e scompattalo.
-4. Apri il file `.dmg` e trascina **Raccoon Arcade** nella cartella **Applicazioni**.
-5. La prima volta, fai clic con il tasto destro su **Raccoon Arcade** e scegli **Apri**. Poi conferma con **Apri**.
+I file pronti si scaricano dalla pagina **Actions** del repository su GitHub. Apri l'ultima esecuzione riuscita di **Build Raccoon Arcade**. In fondo alla pagina ci sono due pacchetti: **RaccoonArcade-mac-arm64** e **RaccoonArcade-linux-x64**.
 
-Il Mac può mostrare un avviso perché l'app non è firmata da Apple. Il passaggio 5 basta una volta sola.
+### Mac con Apple Silicon (M1, M2, M3, M4)
+
+1. Scarica **RaccoonArcade-mac-arm64** e scompattalo.
+2. Se trovi un file `.dmg`, aprilo e trascina **Raccoon Arcade** nella cartella **Applicazioni**.
+3. Se trovi un file `.zip`, scompattalo e sposta **Raccoon Arcade** nella cartella **Applicazioni**.
+4. L'app non è firmata da Apple. Il Mac può dire che è "danneggiata". In quel caso apri il Terminale e scrivi questi due comandi:
+
+```bash
+xattr -cr "/Applications/Raccoon Arcade.app"
+```
+
+```bash
+codesign --force --deep --sign - "/Applications/Raccoon Arcade.app"
+```
+
+5. Apri l'app. Se compare ancora un avviso, fai clic con il tasto destro su **Raccoon Arcade**, scegli **Apri** e conferma con **Apri**.
+
+Il file `.zip` creato su Linux non ha la firma locale. Per questo i comandi del passaggio 4 servono quasi sempre. Il file `.dmg` creato su un Mac può non averne bisogno.
+
+### Linux (64 bit)
+
+Scarica **RaccoonArcade-linux-x64**. Contiene due file. Ne basta uno.
+
+**AppImage** (non serve installare niente):
+
+```bash
+chmod +x RaccoonArcade-1.0.0-linux-x86_64.AppImage
+```
+
+```bash
+./RaccoonArcade-1.0.0-linux-x86_64.AppImage
+```
+
+Se non si apre, per esempio su Ubuntu 24.04, prova così:
+
+```bash
+./RaccoonArcade-1.0.0-linux-x86_64.AppImage --no-sandbox
+```
+
+**Archivio `.tar.gz`**:
+
+```bash
+tar xzf RaccoonArcade-1.0.0-linux-x64.tar.gz
+```
+
+```bash
+./raccoon-arcade-1.0.0/raccoon-arcade
+```
+
+Aggiungi `--no-sandbox` alla fine se serve, come sopra.
 
 ## Comandi (per chi sviluppa)
 
@@ -69,13 +114,25 @@ Salva una immagine di ogni gioco a partita in corso (serve Playwright):
 npm run screenshots
 ```
 
-Crea il file `.dmg` per Mac M1 (va eseguito su un Mac):
+Crea i file per Mac M1: `.dmg` e `.zip` (va eseguito su un Mac):
 
 ```bash
 npm run build:mac
 ```
 
-Il file finale finisce nella cartella `dist/`.
+Crea solo il `.zip` per Mac M1 (funziona anche su Linux):
+
+```bash
+npm run build:mac-zip
+```
+
+Crea i file per Linux: `.AppImage` e `.tar.gz`:
+
+```bash
+npm run build:linux
+```
+
+I file finali finiscono nella cartella `dist/`.
 
 ## Struttura
 
@@ -85,7 +142,7 @@ Il file finale finisce nella cartella `dist/`.
 - `src/js/core/`: utilità, audio, partite salvate, base per i giochi a canvas.
 - `src/js/games/`: un file per gioco, con regole e interfaccia.
 - `tests/`: test automatici delle regole. `tests/e2e/`: prove nel browser.
-- `.github/workflows/build-mac.yml`: crea il `.dmg` su un runner macOS M1.
+- `.github/workflows/build.yml`: crea i file per Mac (runner macOS M1) e per Linux.
 
 ## Controlli generali
 

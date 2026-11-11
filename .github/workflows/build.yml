@@ -1,0 +1,53 @@
+name: Build Raccoon Arcade
+
+on:
+  push:
+    branches: [main, 'claude/**']
+  workflow_dispatch:
+
+jobs:
+  mac:
+    name: Mac (Apple Silicon)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci || npm install
+      - name: Run logic tests
+        run: npm test
+      - name: Build the Apple Silicon app (.dmg and .zip)
+        run: npm run build:mac
+      - name: Upload the Mac files
+        uses: actions/upload-artifact@v4
+        with:
+          name: RaccoonArcade-mac-arm64
+          path: |
+            dist/*.dmg
+            dist/*.zip
+
+  linux:
+    name: Linux (64 bit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci || npm install
+      - name: Run logic tests
+        run: npm test
+      - name: Build the Linux app (.AppImage and .tar.gz)
+        run: npm run build:linux
+      - name: Upload the Linux files
+        uses: actions/upload-artifact@v4
+        with:
+          name: RaccoonArcade-linux-x64
+          path: |
+            dist/*.AppImage
+            dist/*.tar.gz
