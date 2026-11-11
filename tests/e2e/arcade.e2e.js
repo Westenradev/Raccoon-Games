@@ -4,11 +4,12 @@
 // the navigation and the input layer.
 //
 // Run:   node tests/e2e/arcade.e2e.js                 (all scenarios, about 4 minutes)
+//        SOAK_SECONDS=600 node tests/e2e/arcade.e2e.js soak   (longer random play)
 //        node tests/e2e/arcade.e2e.js tetris snake    (only some scenarios)
 //        node tests/e2e/arcade.e2e.js --strict        (known bugs count as failures)
 //        SHOTS=/some/folder node tests/e2e/arcade.e2e.js   (also saves screenshots there)
 //        RA_SRC=/copy/of/src node tests/e2e/arcade.e2e.js  (tests another copy of the app)
-// Scenarios: shell, tetris, snake, invaders, pacman, bubbles, framerate, rare.
+// Scenarios: shell, tetris, snake, invaders, pacman, bubbles, framerate, rare, soak.
 // Exit code 0 = every check passed. Checks marked "known bug" are printed, and count as
 // failures only with --strict (remove a mark once the bug is fixed).
 //
@@ -1607,6 +1608,20 @@ async function scenarioFramerate(browser) {
   // A very slow display (5 frames per second): the game slows down, it must not jump or crash.
   const slow = await measure(5, false);
   check('at 5 frames per second the game runs slower, without errors', slow.invPx > 20 && slow.invPx <= ref.invPx + 5, JSON.stringify(slow));
+  // The window was hidden for 5 seconds (no frames), then comes back: the game must not jump.
+  const gap = await page.evaluate(() => {
+    const RA = window.RA;
+    RA.openGame('snake');
+    window.__tap('Enter');
+    window.__vtick(30, 1000 / 60);
+    const s = RA.current.debug.state;
+    const x0 = s.snake[0].x;
+    window.__vtick(1, 5000);
+    const jump = s.snake[0].x - x0;
+    RA.showMenu();
+    return { jump: jump, alive: s.alive };
+  });
+  check('after 5 s without frames (hidden window) the game moves on by one step at most', gap.alive && gap.jump <= 1, JSON.stringify(gap));
   if (process.env.VERBOSE) rows.forEach((r) => console.log('  ' + r));
   check('no page errors', page.errors.length === 0, page.errors.join(' | '));
   await page.context().close();
@@ -1750,6 +1765,124 @@ async function scenarioRare(browser) {
   await page.context().close();
 }
 
+
+// =====================================================================================
+// SOAK: many games with random keys and clicks on the simulated display (fast). It checks
+// that nothing throws, the cards always come and go, and the state stays inside its limits.
+// =====================================================================================
+function soakRun(arg) {
+  const RA = window.RA;
+  const id = arg.id;
+  let seed = arg.seed;
+  const rnd = function () { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  const KEYS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' ', 'a', 'd', 'w', 's', 'p', 'x'];
+  const held = {};
+  const problems = [];
+  const stats = { games: 0, best: 0, frames: 0, wins: 0 };
+  const bad = function (msg) { if (problems.length < 8 && problems.indexOf(msg) < 0) problems.push(msg); };
+  if (RA.currentId !== id) RA.openGame(id);
+  const canvas = document.querySelector('.arcade-stage canvas');
+  const frames = Math.round(arg.seconds * 60);
+  let lastScore = 0;
+  for (let f = 0; f < frames; f++) {
+    const d = RA.current.debug;
+    const cards = document.querySelectorAll('.overlay').length;
+    if (cards > 1) bad('two cards at once');
+    if (!d.started) {
+      if (cards !== 1) bad('game stopped without a card');
+      // Start with Enter or with the button, after a short random wait.
+      if (rnd() < 0.2) {
+        if (rnd() < 0.5) window.__tap('Enter'); else document.querySelector('.overlay button.big').click();
+        if (!RA.current.debug.started) bad('the card did not start the game');
+        if (document.querySelectorAll('.overlay').length !== 0) bad('the card stayed after the start');
+        stats.games += 1;
+        lastScore = RA.current.debug.state.score;
+      }
+    } else {
+      // Random keys: press and release at random.
+      if (rnd() < 0.12) {
+        const k = KEYS[Math.floor(rnd() * KEYS.length)];
+        if (k === 'p' && rnd() < 0.7) { /* pause less often */ } else if (held[k]) { held[k] = false; window.__key('keyup', k); } else { held[k] = true; window.__key('keydown', k); }
+      }
+      if (id === 'bubbles' && rnd() < 0.05) {
+        const r = canvas.getBoundingClientRect();
+        const init = { clientX: r.left + rnd() * r.width, clientY: r.top + rnd() * r.height * 0.8, bubbles: true };
+        canvas.dispatchEvent(new MouseEvent('mousemove', init));
+        if (rnd() < 0.7) canvas.dispatchEvent(new MouseEvent('mousedown', init));
+      }
+      if (id === 'tetris' && d.paused && rnd() < 0.2) window.__tap('p');
+    }
+    window.__vtick(1, 1000 / 60);
+    stats.frames += 1;
+    // Limits of the state.
+    const s = RA.current.debug.state;
+    if (typeof s.score !== 'number' || !isFinite(s.score) || s.score < 0) bad('score ' + s.score);
+    if (RA.current.debug.started && s.score < lastScore) bad('score went down ' + lastScore + ' -> ' + s.score);
+    lastScore = s.score;
+    stats.best = Math.max(stats.best, s.score);
+    if (s.won && !RA.current.debug.started && !s.counted) { s.counted = true; stats.wins += 1; }
+    if (id === 'tetris') {
+      const T = RA.modules.tetris;
+      if (s.board.some((r) => r.every((v) => v !== null))) bad('full row not cleared');
+      if (s.cur && T.collides(s.board, s.cur.type, s.cur.rot, s.cur.x, s.cur.y)) bad('piece overlaps the board');
+      if (s.level !== Math.floor(s.lines / 10) + 1) bad('level');
+    } else if (id === 'snake') {
+      const keys = s.snake.map((p) => p.x + ',' + p.y);
+      if (new Set(keys).size !== keys.length) bad('snake overlaps itself');
+      if (s.food && keys.indexOf(s.food.x + ',' + s.food.y) >= 0) bad('food on the snake');
+      if (s.snake.some((p) => p.x < 0 || p.y < 0 || p.x >= 24 || p.y >= 18)) bad('snake outside the field');
+    } else if (id === 'invaders') {
+      if (s.px < 20 || s.px > 460) bad('player outside ' + s.px);
+      if (s.lives < 0 || s.lives > 3) bad('lives ' + s.lives);
+      if (s.pBullets.length > 2) bad('more than 2 bullets');
+      if (s.eBullets.length > 40) bad('too many enemy shots ' + s.eBullets.length);
+    } else if (id === 'pacman') {
+      let n = 0;
+      s.grid.forEach((r) => r.forEach((c) => { if (c === '.' || c === 'o') n += 1; }));
+      if (n !== s.acornsLeft) bad('dot counter ' + s.acornsLeft + ' vs ' + n);
+      if (s.grid[s.pac.y][s.pac.x] === '#') bad('player in a wall');
+      if (s.ghosts.some((g) => s.grid[g.y][g.x] === '#')) bad('ghost in a wall');
+      if (s.lives < 0 || s.lives > 3) bad('lives ' + s.lives);
+    } else if (id === 'bubbles') {
+      if (!s.moving && !s.over && s.grid.size && !new Set(s.grid.values()).has(s.cur)) bad('shooter holds a kind that is not on the board');
+      if (Math.abs(s.angle) > 1.35 + 1e-9) bad('angle ' + s.angle);
+      s.grid.forEach((v, k) => { if (Number(k.split(',')[0]) < s.base) bad('bubble above the ceiling'); });
+    }
+    if (f % 30 === 0) {
+      const t = window.__t.texts;
+      for (let i = 0; i < t.length; i++) if (/NaN|undefined|null|Infinity/.test(t[i])) bad('HUD text "' + t[i] + '"');
+    }
+  }
+  Object.keys(held).forEach((k) => { if (held[k]) window.__key('keyup', k); });
+  return { stats: stats, problems: problems, seed: seed };
+}
+
+async function scenarioSoak(browser) {
+  const check = makeChecker('soak');
+  const page = await newPage(browser, { virtualClock: true });
+  const SECONDS = Number(process.env.SOAK_SECONDS || 120); // simulated seconds per game
+  for (const id of ARCADE) {
+    const total = { games: 0, best: 0, frames: 0, wins: 0 };
+    const problems = [];
+    let seed = 12345 + id.length * 977;
+    for (let done = 0; done < SECONDS; done += 20) {
+      const r = await page.evaluate(soakRun, { id: id, seconds: 20, seed: seed });
+      seed = r.seed;
+      total.games += r.stats.games;
+      total.frames += r.stats.frames;
+      total.wins += r.stats.wins;
+      total.best = Math.max(total.best, r.stats.best);
+      r.problems.forEach((p) => { if (!problems.includes(p)) problems.push(p); });
+    }
+    check(id + ': ' + SECONDS + ' s of random play (' + total.games + ' games) keeps the state and the cards in order', problems.length === 0, problems.join('; '));
+    check(id + ': random play started several games', total.games >= 2, JSON.stringify(total));
+    check.note(id + ': ' + total.games + ' games, best score ' + total.best + (total.wins ? ', levels won ' + total.wins : ''));
+    await page.evaluate(() => window.RA.showMenu());
+  }
+  check('no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+}
+
 // =====================================================================================
 const SCENARIOS = {
   shell: scenarioShell,
@@ -1760,6 +1893,7 @@ const SCENARIOS = {
   bubbles: scenarioBubbles,
   framerate: scenarioFramerate,
   rare: scenarioRare,
+  soak: scenarioSoak,
 };
 
 (async () => {
@@ -1769,7 +1903,10 @@ const SCENARIOS = {
   const t0 = Date.now();
   const browser = await chromium.launch();
   // The scenarios run side by side, each in its own browser context (own storage).
-  await Promise.all(names.map(async (n) => {
+  // The ones that play in real time go first; the ones on the simulated display use a lot
+  // of processor time, so they run afterwards and do not slow the real-time games down.
+  const HEAVY = ['framerate', 'soak'];
+  const runAll = (list) => Promise.all(list.map(async (n) => {
     const t = Date.now();
     try {
       await SCENARIOS[n](browser);
@@ -1779,6 +1916,8 @@ const SCENARIOS = {
     }
     console.log('  done: ' + n + ' (' + Math.round((Date.now() - t) / 1000) + ' s)');
   }));
+  await runAll(names.filter((n) => !HEAVY.includes(n)));
+  await runAll(names.filter((n) => HEAVY.includes(n)));
   await browser.close();
 
   const failed = results.filter((r) => !r.ok && !r.known);

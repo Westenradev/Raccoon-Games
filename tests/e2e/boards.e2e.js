@@ -57,7 +57,7 @@ function makeRng(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-const rnd = makeRng(SEED);
+let rnd = makeRng(SEED);
 const pickOne = (arr) => arr[Math.floor(rnd() * arr.length)];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sortNum = (arr) => arr.slice().sort((a, b) => a - b);
@@ -81,6 +81,20 @@ async function openFromMenu(title, readySelector) {
   await page.locator('#stage .tile', { has: page.locator('.tile-title', { hasText: new RegExp('^\\s*' + title + '\\s*$') }) }).first().click();
   await page.waitForSelector(readySelector);
 }
+// Counts the calls of every sound effect (window.RA.audio.sfx.*), to check which sound a result plays.
+async function installSoundSpy() {
+  await page.evaluate(() => {
+    if (window.__sfx) return;
+    window.__sfx = {};
+    const sfx = window.RA.audio.sfx;
+    Object.keys(sfx).forEach((name) => {
+      const real = sfx[name];
+      window.__sfx[name] = 0;
+      sfx[name] = function () { window.__sfx[name] += 1; return real.apply(this, arguments); };
+    });
+  });
+}
+const sounds = () => page.evaluate(() => Object.assign({}, window.__sfx));
 // Clicks the first button inside scope whose text matches the word.
 const clickBtn = (scope, re) => page.locator(scope + ' button', { hasText: re }).first().click({ timeout: 5000 });
 // Checks that the page does not need scrolling at the main window size (1120 x 812).
@@ -197,6 +211,7 @@ async function sudokuLevel(levelKey, levelLabel, expectGivens, stats) {
   const wrongFor = (i) => (sol[i] % 9) + 1;
   let mistakes = 0;
   let hints = 0;
+  const sfxStart = await sounds();
 
   // --- givens cannot be changed (mouse pad, keyboard digit, Backspace, Delete, erase button)
   for (const g of [givens[0], givens[givens.length - 1], pickOne(givens)]) {
@@ -333,6 +348,8 @@ async function sudokuLevel(levelKey, levelLabel, expectGivens, stats) {
     }
   }
   st = await sudokuState();
+  const sfxEnd = await sounds();
+  eq([sfxEnd.win - sfxStart.win, sfxEnd.bad - sfxStart.bad], [1, mistakes], 'sudoku ' + tag + ': the win sound plays once, the error sound once per wrong entry');
   ok(st.won, 'sudoku ' + tag + ': solved, debug.won is true');
   eq(st.board, sol, 'sudoku ' + tag + ': final board equals the solution');
   ok(/^Bravo! Sudoku completato in \d+:\d\d/.test(st.msg), 'sudoku ' + tag + ': win message shown ("' + st.msg + '")');
@@ -597,6 +614,9 @@ async function mjPlayPair(pair, expect) {
 
 async function mjWinChecks(expect, label) {
   const st = await mjState();
+  const sfxNow = await sounds();
+  eq(sfxNow.win - (expect.winSounds || 0), 1, 'mahjong ' + label + ': the win sound plays once');
+  expect.winSounds = sfxNow.win;
   ok(st.won && st.tiles.length === 0, 'mahjong ' + label + ': all tiles removed, debug.won');
   ok(st.overlay && /Tavolo pulito/.test(st.overlay.h2), 'mahjong ' + label + ': win overlay is shown');
   ok(st.overlay && new RegExp('Punti: ' + expect.score + '\\b.*Tempo: \\d+:\\d\\d').test(st.overlay.p), 'mahjong ' + label + ': overlay shows score ' + expect.score + ' and the time ("' + (st.overlay && st.overlay.p) + '")');
@@ -977,7 +997,7 @@ const damaState = () => page.evaluate(() => {
       const p = e.querySelector('.piece');
       return { sq: Number(e.dataset.sq), cls: e.className.split(' '), p: p ? p.className.split(' ') : null };
     }),
-    counts: [ints(pills[0] || '')[0], ints(pills[1] || '')[0]], wins: ints(pills[2] || ''),
+    counts: [ints(pills[0] || '')[0], ints(pills[1] || '')[0]], wins: ints(pills[2] || ''), pillText: pills.join(' | '),
     msg: document.querySelector('.dama .msg').textContent,
     msgBig: document.querySelector('.dama .msg').classList.contains('big'),
     levelBtns: q('.dama button[data-level]').map((b) => ({ k: b.dataset.level, on: !b.classList.contains('ghost') })),
@@ -1006,6 +1026,7 @@ function checkDamaDom(st, label) {
   });
   ok(good, 'dama ' + label + ': the board on screen matches debug.board (pieces, colours, Damoni, all on dark squares)');
   eq(st.counts, [countOf(st.b, 'w'), countOf(st.b, 'b')], 'dama ' + label + ': piece counters');
+  knownBug(!/(^|\D)1 pezzi/.test(st.pillText), 'dama: with one piece left the counter says "1 pezzi" instead of "1 pezzo"');
   eq(st.wins, [st.lsScore.human, st.lsScore.cpu], 'dama ' + label + ': wins counter equals the saved score');
   ok(st.levelBtns.length === 3 && st.levelBtns.filter((b) => b.on).length === 1 && st.levelBtns.find((b) => b.on).k === st.level, 'dama ' + label + ': the current level button is highlighted');
 }
@@ -1105,6 +1126,7 @@ async function damaGame(opts, cov, timing) {
   let st = await damaState();
   eq([st.b, st.turn, st.over, st.thinking, st.level, st.lsLevel], [START, 'w', null, false, opts.level, JSON.stringify(opts.level)], 'dama ' + label + ': fresh game, white to move, level set and saved');
   const winsBefore = st.lsScore;
+  const sfxBefore = await sounds();
   let quiet = 0;
   let plies = 0;
   let humanMoves = 0;
@@ -1115,6 +1137,7 @@ async function damaGame(opts, cov, timing) {
     const info = checkHumanTurn(st, turnLabel);
     if (!info.moves.length) { ok(false, 'dama ' + turnLabel + ': white has no move but the game is not over'); break; }
     if (info.must && !/ha mangiato/.test(st.msg)) ok(RE_MUST.test(st.msg), 'dama ' + turnLabel + ': the message says that a capture is mandatory ("' + st.msg + '")');
+    if (info.must && /ha mangiato/.test(st.msg)) knownBug(RE_MUST.test(st.msg), 'dama: right after a capture by the CPU the message does not say that I must capture now (only the ring on the piece shows it)');
     if (!info.must) ok(!RE_MUST.test(st.msg), 'dama ' + turnLabel + ': no "Devi mangiare" when there is nothing to capture');
     if (info.must && cov.mustShots < 1) { cov.mustShots += 1; await shot('dama-must-capture'); }
     if (humanMoves < 2 || info.must || rnd() < 0.2) await illegalClicks(st, info, turnLabel, cov);
@@ -1226,6 +1249,13 @@ async function damaGame(opts, cov, timing) {
   ok(st.msgBig && (result === 'human' ? /Hai vinto/i : result === 'cpu' ? /Ha vinto/i : /Patta/i).test(st.msg), 'dama ' + label + ': end message for "' + result + '" ("' + st.msg + '")');
   eq(st.lsScore, { human: winsBefore.human + (result === 'human' ? 1 : 0), cpu: winsBefore.cpu + (result === 'cpu' ? 1 : 0) }, 'dama ' + label + ': the win is counted once');
   ok(!st.sqs.some((q) => q.p && (has(q.p, 'movable') || has(q.p, 'must'))), 'dama ' + label + ': no piece is offered after the end');
+  const sfxAfter = await sounds();
+  if (result === 'human') eq([sfxAfter.win - sfxBefore.win, sfxAfter.lose - sfxBefore.lose], [1, 0], 'dama ' + label + ': my win plays the win sound once');
+  if (result === 'cpu') eq([sfxAfter.win - sfxBefore.win, sfxAfter.lose - sfxBefore.lose], [0, 1], 'dama ' + label + ': my defeat plays the lose sound once');
+  if (result === 'draw') {
+    eq(sfxAfter.win - sfxBefore.win, 0, 'dama ' + label + ': a draw does not play the win sound');
+    knownBug(sfxAfter.lose - sfxBefore.lose === 0, 'dama: a draw plays the same sound as a defeat');
+  }
   if (cov.overShots[result] !== true) { cov.overShots[result] = true; await shot('dama-over-' + result); }
   const pieces = [];
   for (let sq = 0; sq < 64; sq++) if (st.b[sq] !== '.') pieces.push(sq);
@@ -1362,12 +1392,22 @@ async function testDama() {
   await page.goto(PAGE_URL);
   await waitMenu();
   ok(errors.length === 0, 'menu: no page errors or console errors while the menu is drawn (' + errors.slice(0, 3).join(' | ') + ')');
+  ok((await page.locator('#stage .tile .thumb').count()) === 0 || (await page.evaluate(() => Array.from(document.querySelectorAll('#stage .tile')).filter((t) => /Sudoku|Mahjong|Dama/.test(t.textContent)).every((t) => { const th = t.querySelector('.thumb'); return !th || th.children.length > 0; }))), 'menu: the Sudoku, Mahjong and Dama tiles have a picture');
+  await shot('menu');
   const out = {};
   const sections = { sudoku: testSudoku, mahjong: testMahjong, dama: testDama };
+  let sectionNo = 0;
   for (const name of Object.keys(sections)) {
+    sectionNo += 1;
     if (ONLY.indexOf(name) < 0) continue;
     const before = errors.length;
     try {
+      // Every section starts from a freshly loaded page and its own random sequence,
+      // so a section plays the same games whether it runs alone or after the others.
+      rnd = makeRng(SEED + sectionNo);
+      await page.goto(PAGE_URL);
+      await waitMenu();
+      await installSoundSpy();
       out[name] = await sections[name]();
     } catch (err) {
       failures.push(name + ': test aborted: ' + (err && err.message ? err.message.split('\n')[0] : err));
