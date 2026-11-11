@@ -61,7 +61,52 @@
     osc.stop(t0 + dur + 0.05);
   }
 
+  // A short burst of filtered noise. It is the base of the paper sounds of the cards.
+  let noiseBuffer = null;
+  function noise(dur, freq, q, vol, delay) {
+    if (muted) return;
+    const c = context();
+    if (!c) return;
+    if (!noiseBuffer) {
+      noiseBuffer = c.createBuffer(1, c.sampleRate, c.sampleRate);
+      const data = noiseBuffer.getChannelData(0);
+      for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    }
+    const t0 = c.currentTime + (delay || 0);
+    const src = c.createBufferSource();
+    src.buffer = noiseBuffer;
+    const band = c.createBiquadFilter();
+    band.type = 'bandpass';
+    band.frequency.value = freq;
+    band.Q.value = q;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(band);
+    band.connect(g);
+    g.connect(masterGain);
+    src.start(t0, Math.random() * 0.5, dur + 0.05);
+  }
+
   const sfx = {
+    // Cards: a card laid on the table, a card turned or drawn, cards taken, the deck shuffled.
+    card: function () { noise(0.07, 2600, 0.9, 0.5); noise(0.05, 500, 0.7, 0.35, 0.012); },
+    flip: function () { noise(0.05, 4200, 1.2, 0.3); },
+    take: function () {
+      noise(0.06, 3000, 0.9, 0.4);
+      noise(0.07, 2200, 0.9, 0.45, 0.07);
+      noise(0.09, 900, 0.7, 0.3, 0.13);
+    },
+    shuffle: function () {
+      for (let i = 0; i < 14; i++) noise(0.035, 3000 + Math.random() * 2500, 1.4, 0.16 + Math.random() * 0.1, i * 0.032);
+      noise(0.09, 700, 0.7, 0.4, 0.5);
+    },
+    deal: function (n) {
+      for (let i = 0; i < (n || 3); i++) noise(0.05, 3200, 1, 0.3, i * 0.09);
+    },
+    // Wooden pieces and tiles: a short knock.
+    knock: function () { noise(0.03, 1800, 2, 0.5); tone(190, 0.06, 'sine', 0.2); },
     click: function () { tone(660, 0.05, 'triangle', 0.12); },
     place: function () { tone(330, 0.08, 'triangle', 0.15); },
     ok: function () { tone(523, 0.1, 'sine', 0.15); tone(784, 0.14, 'sine', 0.15, 0.08); },

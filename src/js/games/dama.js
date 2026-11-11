@@ -16,6 +16,7 @@
   const isNode = typeof require === 'function';
   const U = isNode ? require('../core/util.js') : window.RA.modules.util;
   const A = isNode ? null : window.RA.audio;
+  const SV = isNode ? null : window.RA.modules.saves;
 
   const WHITE = 'w'; // human, moves up (row index goes down)
   const BLACK = 'b'; // CPU, moves down
@@ -231,6 +232,24 @@
       render();
     }
 
+    // ----- saved game -----
+    function persist() {
+      if (asking) return; // the saved game is still waiting for an answer
+      if (over || !lastMove) return SV.clear('dama');
+      SV.save('dama', { board: board, turn: turn, quietPlies: quietPlies, lastMove: lastMove, level: level });
+    }
+
+    function restore(saved) {
+      board = saved.board;
+      turn = saved.turn;
+      quietPlies = saved.quietPlies;
+      lastMove = saved.lastMove;
+      level = LEVELS[saved.level] ? saved.level : level;
+      note = 'Partita ripresa da dove l\'avevi lasciata.';
+      render();
+      if (turn === BLACK) cpuTurn();
+    }
+
     function finish(result) {
       over = result;
       if (result === 'human') wins.human += 1;
@@ -247,7 +266,10 @@
       board = applyMove(board, mv);
       quietPlies = mv.caps.length || wasMan ? 0 : quietPlies + 1;
       lastMove = mv;
-      if (A) mv.caps.length ? A.sfx.pop() : A.sfx.place();
+      if (A) {
+        A.sfx.knock();
+        if (mv.caps.length) A.sfx.pop();
+      }
       if (A && wasMan && board[mv.to].d) A.sfx.power();
       turn = other(turn);
       selected = null;
@@ -390,12 +412,22 @@
         U.el('span', null, U.el('i', { class: 'piece white damone' }), 'Damone: muove in ogni direzione. Solo un Damone lo può mangiare')));
     }
 
-    render();
+    const saved = SV.load('dama');
+    let asking = !!saved;
+    if (saved) {
+      SV.ask(root, 'Dama: tu ' + pieces(countPieces(saved.board, WHITE)) + ', avversario ' + pieces(countPieces(saved.board, BLACK)) + '.',
+        function () { asking = false; restore(saved); },
+        function () { asking = false; SV.clear('dama'); render(); });
+    } else {
+      render();
+    }
     return {
       destroy: function () {
+        persist();
         alive = false;
         timers.forEach(clearTimeout);
       },
+      save: persist,
       debug: {
         get board() { return board; },
         get turn() { return turn; },

@@ -1646,6 +1646,8 @@ async function escapeTests() {
     };
   }, SEED);
   await context.addInitScript(installLayoutProbe);
+  // Saved games are tested in saves.e2e.js. Here every game must start fresh.
+  await context.addInitScript(() => { try { localStorage.setItem('ra.saves.off', 'true'); } catch (e) { /* no storage */ } });
   page = await context.newPage();
   page.on('pageerror', (e) => pageErrors.push('pageerror: ' + e.message));
   page.on('console', (m) => { if (m.type() === 'error') pageErrors.push('console: ' + m.text()); });

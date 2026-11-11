@@ -102,6 +102,9 @@ body.arcade-mode #topbar { background: #0c0c10; border-bottom-color: #2a2a35; }
 }
 .btn.ghost:active { transform: translateY(1px); }
 .btn.big { font-size: 19px; padding: 13px 30px; margin-top: 10px; }
+/* A quiet second choice under a main button, for example "new game" under "resume". */
+.btn.plain { background: none; border: 0; box-shadow: none; color: inherit; text-decoration: underline; text-underline-offset: 4px; font-weight: 400; margin-top: 12px; padding: 6px 10px; }
+.btn.plain:active { transform: none; }
 .btn.pulse { animation: pulse 1s ease-in-out infinite; }
 .btn[hidden] { display: none; }
 @keyframes pulse {
@@ -173,6 +176,19 @@ body.arcade-mode #topbar { background: #0c0c10; border-bottom-color: #2a2a35; }
   box-shadow: 0 0 0 1px #33333f, 0 10px 22px rgba(0, 0, 0, 0.7);
 }
 .tile .thumb canvas { display: block; width: 100%; height: 100%; }
+.tile { position: relative; }
+.tile-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  background: var(--ottone-chiaro);
+  color: var(--inchiostro);
+  font-size: 13.5px;
+  font-weight: 700;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
 .tile-title { margin-top: 10px; font-family: var(--display); font-weight: 700; font-size: 24px; line-height: 1.1; }
 .shelf.arcade .tile-title { font-size: 20px; }
 .tile-desc { margin-top: 3px; font-size: 15px; color: #cbbd9f; }
@@ -193,6 +209,8 @@ body.arcade-mode #topbar { background: #0c0c10; border-bottom-color: #2a2a35; }
   gap: 12px;
   margin: 0 auto;
 }
+/* While a saved game waits for "resume or new", the empty table keeps some height. */
+.game-panel.asking { min-height: 340px; width: min(100%, 760px); }
 .msg { min-height: 26px; text-align: center; font-size: 18px; max-width: 760px; }
 .msg.big { font-family: var(--display); font-size: 28px; font-weight: 700; color: var(--ottone-chiaro); }
 .hint { color: rgba(247, 242, 228, 0.72); font-size: 15px; text-align: center; max-width: 760px; }
@@ -602,6 +620,8 @@ body.arcade-mode #topbar { background: #0c0c10; border-bottom-color: #2a2a35; }
   box-shadow: 4px 4px 0 #b38f00;
 }
 .arcade-stage .btn:active { transform: translate(3px, 3px); box-shadow: 1px 1px 0 #b38f00; }
+.arcade-stage .btn.plain { background: none; color: #fff; box-shadow: none; font-size: 11px; margin-top: 14px; padding: 8px; }
+.arcade-stage .btn.plain:active { transform: none; box-shadow: none; }
 .arcade-help { margin: 10px auto 0; text-align: center; font-size: 16px; color: #c4c4d6; }
 
 /* ---------- Narrow windows ---------- */

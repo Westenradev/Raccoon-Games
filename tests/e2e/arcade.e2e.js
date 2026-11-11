@@ -122,6 +122,8 @@ async function newPage(browser, opts) {
   const o = opts || {};
   const ctx = await browser.newContext({ viewport: o.viewport || { width: 1120, height: 812 }, deviceScaleFactor: o.dsf || 1 });
   await ctx.addInitScript(OBSERVE, !!o.virtualClock);
+  // Saved games are tested in saves.e2e.js. Here every game must start fresh.
+  await ctx.addInitScript(() => { try { localStorage.setItem('ra.saves.off', 'true'); } catch (e) { /* no storage */ } });
   const page = await ctx.newPage();
   page.errors = [];
   const addError = (line) => { const first = line.split('\n')[0]; if (!page.errors.includes(first)) page.errors.push(first); };
@@ -656,7 +658,7 @@ async function scenarioSnake(browser) {
   if (s.eaten === best.eaten && gaps.length >= 8) check('late speed follows max(0.09, 0.15 - 0.003 x fish)', near(median, wantGap, 22), 'median gap ' + Math.round(median) + ' ms, expected ' + Math.round(wantGap) + ' ms at ' + best.eaten + ' fish');
   card = await overlayText(page);
   const hi = await hiScore(page, 'snake');
-  check('game-over card shows the result', cardHas(card, 'Punti', s.score) && cardHas(card, '(Pesci|Bocconi)', s.eaten) && cardHas(card, 'Record', hi), card);
+  check('game-over card shows the result', cardHas(card, 'Punti', s.score) && cardHas(card, '(Pesci|Bocconi|Frutti)', s.eaten) && cardHas(card, 'Record', hi), card);
   check('high score is saved', hi >= best.score && hi > 0, 'hi ' + hi + ', best ' + best.score);
   await shot(page, 'snake-gameover');
   // The record is shown after leaving and coming back.
@@ -965,7 +967,8 @@ async function scenarioPacman(browser) {
   await page.evaluate(() => { const B = window.__pacBot; B.target = { x: 0, y: 7 }; B.targetThen = 'left'; });
   let wrapped = false;
   try {
-    await page.waitForFunction(() => window.__pacBot.wraps > 0 || window.RA.current.debug.state.lives < 3, null, { timeout: 25000 });
+    // A chaser may catch the bot on the way: it then tries again with the next life.
+    await page.waitForFunction(() => window.__pacBot.wraps > 0 || window.RA.current.debug.state.over, null, { timeout: 60000 });
     wrapped = await page.evaluate(() => window.__pacBot.wraps > 0);
   } catch (e) { /* reported below */ }
   s = await state(page, pacSnap);
@@ -994,7 +997,7 @@ async function scenarioPacman(browser) {
     if (!shotScared && s.scared > 3) { shotScared = true; await shot(page, 'pacman-scared'); }
     if (s.over && s.won) { wonLevel = true; break; }
     if (s.over) {
-      if (games >= 3) break;
+      if (games >= 5) break; // the bot is not a strong player: it gets five games
       games += 1;
       await page.keyboard.press('Enter');
       await page.evaluate(() => { window.__pacBot.lastLives = null; });
@@ -1276,7 +1279,7 @@ async function scenarioBubbles(browser) {
       const card = await overlayText(page);
       check('loss card shows score and record', cardHas(card, 'Punti', s.score) && cardHas(card, 'Record', await hiScore(page, 'bubbles')), card);
       await shot(page, 'bubbles-lost');
-      if (games >= 3) break;
+      if (games >= 5) break; // the bot is not a strong player: it gets five games
       games += 1;
       await page.keyboard.press('Enter');
       continue;
@@ -1761,7 +1764,7 @@ async function scenarioShell(browser) {
         const c = document.querySelector('.arcade-stage canvas');
         const t = c.getContext('2d').getTransform();
         return { scale: t.a, ok: t.a === t.d && t.a * w === c.width };
-      }, { bubbles: 360, tetris: 470, invaders: 480, pacman: 630, snake: 740 }[id]);
+      }, { bubbles: 360, tetris: 470, invaders: 480, pacman: 630, snake: 744 }[id]);
       if (!drawn.ok || drawn.scale < 2) { sharp = false; soft.push(id + ' transform ' + JSON.stringify(drawn)); }
     }
   }

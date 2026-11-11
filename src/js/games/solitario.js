@@ -10,6 +10,7 @@
   const U = isNode ? require('../core/util.js') : window.RA.modules.util;
   const D = isNode ? require('./deck.js') : window.RA.modules.deck;
   const A = isNode ? null : window.RA.audio;
+  const SV = isNode ? null : window.RA.modules.saves;
 
   // Coppe and Denari are the "warm" group. Spade and Bastoni are the "cool" group.
   const groupOf = function (c) { return c.suit < 2 ? 0 : 1; };
@@ -264,6 +265,21 @@
       won = false;
       celebrated = false;
       note = '';
+      if (A) A.sfx.shuffle();
+      render();
+    }
+
+    // ----- saved game -----
+    function persist() {
+      if (asking) return; // the saved game is still waiting for an answer
+      if (won || state.moves === 0) return SV.clear('solitario');
+      SV.save('solitario', { state: state, history: history.slice(-40) });
+    }
+
+    function restore(saved) {
+      state = saved.state;
+      history = saved.history || [];
+      note = 'Partita ripresa da dove l\'avevi lasciata.';
       render();
     }
 
@@ -287,7 +303,10 @@
       sel = null;
       hint = null;
       note = '';
-      if (A) dst.type === 'found' ? A.sfx.ok() : A.sfx.place();
+      if (A) {
+        A.sfx.card();
+        if (dst.type === 'found') A.sfx.ok();
+      }
       if (isWon(state)) {
         won = true;
         if (A) A.sfx.win();
@@ -337,7 +356,7 @@
       if (won) return;
       snapshot();
       if (!drawStock(state).ok) history.pop();
-      else if (A) A.sfx.click();
+      else if (A) A.sfx.flip();
       sel = null;
       hint = null;
       note = '';
@@ -554,13 +573,24 @@
     // The spacing of the columns depends on the window height.
     const onResize = function () { if (alive && !celebrated) render(); };
     window.addEventListener('resize', onResize);
-    render();
+    const saved = SV.load('solitario');
+    let asking = !!saved;
+    if (saved) {
+      const done = saved.state.foundation.reduce(function (n, p) { return n + p.length; }, 0);
+      SV.ask(root, 'Solitario: ' + saved.state.moves + ' mosse fatte, ' + done + ' carte su 40 nelle pile finali.',
+        function () { asking = false; restore(saved); },
+        function () { asking = false; SV.clear('solitario'); newGameNow(); });
+    } else {
+      render();
+    }
     return {
       destroy: function () {
+        persist();
         alive = false;
         window.removeEventListener('resize', onResize);
         timers.forEach(clearTimeout);
       },
+      save: persist,
       debug: {
         get state() { return state; },
         set state(s) { autoRun += 1; state = s; history = []; sel = null; won = isWon(s); celebrated = false; render(); },

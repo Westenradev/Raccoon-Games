@@ -8,6 +8,7 @@
   const U = isNode ? require('../core/util.js') : window.RA.modules.util;
   const D = isNode ? require('./deck.js') : window.RA.modules.deck;
   const A = isNode ? null : window.RA.audio;
+  const SV = isNode ? null : window.RA.modules.saves;
 
   const HUMAN = 0;
   const CPU = 1;
@@ -141,6 +142,34 @@
       busy = false;
       shown = null;
       note = hand.turn === HUMAN ? 'Tocca a te. Gioca una carta.' : 'Inizia l\'avversario.';
+      if (A) A.sfx.shuffle();
+      render();
+      proceed();
+    }
+
+    // ----- saved game -----
+    function persist() {
+      if (asking) return; // the saved game is still waiting for an answer
+      if (!hand || hand.ended) {
+        // Between two games only the count of the games won is worth keeping.
+        if (wins[0] || wins[1]) SV.save('briscola', { hand: null, wins: wins, nextLeader: nextLeader });
+        else SV.clear('briscola');
+        return;
+      }
+      // A game where no card was played yet is not worth keeping.
+      const touched = hand.pile[0].length || hand.pile[1].length || hand.table[0] || hand.table[1] || wins[0] || wins[1];
+      if (!touched) return SV.clear('briscola');
+      SV.save('briscola', { hand: hand, wins: wins, nextLeader: nextLeader });
+    }
+
+    function restore(saved) {
+      wins = saved.wins;
+      nextLeader = saved.nextLeader;
+      if (!saved.hand) return startHand();
+      hand = saved.hand;
+      busy = false;
+      shown = null;
+      note = 'Partita ripresa. ' + (hand.turn === HUMAN ? 'Tocca a te.' : 'Tocca all\'avversario.');
       render();
       proceed();
     }
@@ -156,7 +185,7 @@
       render();
       later(function () {
         const r = play(hand, CPU, cpuChoose(hand, rnd));
-        if (A) A.sfx.place();
+        if (A) A.sfx.card();
         afterPlay(r);
       }, 800);
     }
@@ -175,6 +204,7 @@
       render();
       later(function () {
         shown = null;
+        if (A) A.sfx.take();
         note = hand.ended ? '' : (hand.turn === HUMAN ? 'Tocca a te. Gioca una carta.' : 'Gioca l\'avversario.');
         proceed();
       }, 1500);
@@ -184,7 +214,7 @@
       if (busy || hand.ended || hand.turn !== HUMAN) return;
       const r = play(hand, HUMAN, c.id);
       if (!r.ok) return;
-      if (A) A.sfx.place();
+      if (A) A.sfx.card();
       afterPlay(r);
     }
 
@@ -253,12 +283,25 @@
       root.appendChild(U.el('div', { class: 'hint', text: 'Asso 11 punti, Tre 10, Re 4, Cavallo 3, Fante 2. La briscola batte gli altri semi.' }));
     }
 
-    startHand();
+    const saved = SV.load('briscola');
+    let asking = !!saved;
+    if (saved) {
+      const pts = saved.hand ? score(saved.hand).points : null;
+      SV.ask(root, pts
+        ? 'Briscola: tu ' + pts[0] + ' punti, avversario ' + pts[1] + '. Nel mazzo: ' + saved.hand.deck.length + ' carte.'
+        : 'Briscola: partite vinte ' + saved.wins[0] + ' a ' + saved.wins[1] + '.',
+        function () { asking = false; restore(saved); },
+        function () { asking = false; SV.clear('briscola'); startHand(); });
+    } else {
+      startHand();
+    }
     return {
       destroy: function () {
+        persist();
         alive = false;
         timers.forEach(clearTimeout);
       },
+      save: persist,
       debug: {
         get state() { return hand; },
         get busy() { return busy; },

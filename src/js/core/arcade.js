@@ -111,6 +111,7 @@
     const active = o.active || function () { return false; };
     let running = true;
     let paused = false;
+    let ready = 0; // seconds of "PRONTI!" before a resumed game moves
     let raf = 0;
     let last = null;
     let acc = 0;
@@ -131,7 +132,11 @@
       acc += Math.min(0.1, (t - last) / 1000);
       last = t;
       if (!active()) paused = false;
-      if (paused) {
+      if (ready > 0 && !paused) {
+        ready -= acc;
+        acc = 0;
+      }
+      if (paused || ready > 0) {
         acc = 0;
       } else {
         let guard = 0;
@@ -142,6 +147,12 @@
         if (guard >= 8) acc = 0;
       }
       draw();
+      if (ready > 0 && !paused && o.view) {
+        const g = o.view.ctx;
+        g.fillStyle = 'rgba(0,0,0,0.45)';
+        g.fillRect(0, o.view.h / 2 - 34, o.view.w, 68);
+        pixelText(g, 'PRONTI!', o.view.w / 2, o.view.h / 2, 24, '#ffe600');
+      }
       if (paused && o.view) {
         const g = o.view.ctx;
         g.fillStyle = 'rgba(0,0,0,0.74)';
@@ -164,6 +175,8 @@
         if (o.view && o.view.release) o.view.release();
       },
       isPaused: function () { return paused; },
+      // Shows "PRONTI!" for a moment before the game moves (used when a saved game starts again).
+      getReady: function (seconds) { ready = seconds; },
     };
   }
 
@@ -240,16 +253,29 @@
     container.parentNode.appendChild(U.el('p', { class: 'arcade-help', text: text }));
   }
 
+  // First card of an arcade game. With a saved game it offers to take it up again.
+  // opts: { id, title, body, summary(saved), onResume(saved), onNew }
+  function startCard(container, opts) {
+    const SV = window.RA.modules.saves;
+    const saved = SV.load(opts.id);
+    if (!saved) return overlay(container, opts.title, opts.body, 'INIZIA', opts.onNew);
+    return overlay(container, 'PARTITA SALVATA', opts.summary(saved), 'RIPRENDI', function () { opts.onResume(saved); },
+      { text: 'NUOVA PARTITA', onClick: function () { SV.clear(opts.id); opts.onNew(); } });
+  }
+
   // Start / game-over card on top of the game stage. Enter or a click starts.
-  function overlay(container, title, body, buttonText, onStart) {
+  // second (optional) = { text, onClick }: a smaller second button, for example "new game"
+  // under "resume".
+  function overlay(container, title, body, buttonText, onStart, second) {
     let box = null;
-    const go = function () {
+    const close = function (fn) {
       if (!box) return;
       window.removeEventListener('keydown', onKey);
       box.remove();
       box = null;
-      onStart();
+      fn();
     };
+    const go = function () { close(onStart); };
     const onKey = function (e) {
       if (!box || !box.isConnected) {
         window.removeEventListener('keydown', onKey);
@@ -265,6 +291,7 @@
         U.el('h2', { text: title }),
         U.el('p', { text: body }),
         U.el('button', { class: 'btn big', text: buttonText, onclick: go }),
+        second ? U.el('div', null, U.el('button', { class: 'btn plain', 'data-save': 'new', text: second.text, onclick: function () { close(second.onClick); } })) : null,
         U.el('p', { class: 'hint', text: 'Oppure premi il tasto Invio' })));
     container.appendChild(box);
     window.addEventListener('keydown', onKey);
@@ -286,5 +313,6 @@
     help: help,
     record: record,
     overlay: overlay,
+    startCard: startCard,
   };
 });

@@ -9,6 +9,7 @@
   const U = isNode ? require('../core/util.js') : window.RA.modules.util;
   const D = isNode ? require('./deck.js') : window.RA.modules.deck;
   const A = isNode ? null : window.RA.audio;
+  const SV = isNode ? null : window.RA.modules.saves;
 
   const WIN_SCORE = 11;
   const HUMAN = 0;
@@ -261,6 +262,29 @@
       preview = null;
       busy = false;
       note = state.turn === HUMAN ? 'Tocca a te. Scegli una carta dalla tua mano.' : 'Inizia l\'avversario.';
+      if (A) A.sfx.shuffle();
+      render();
+      nextTurn();
+    }
+
+    // ----- saved game -----
+    // What to keep when the player leaves: the match, and the hand in progress.
+    function persist() {
+      if (asking) return; // the saved game is still waiting for an answer
+      // A match where no card was played yet is not worth keeping.
+      const touched = state && (match.round > 1 || !!state.last);
+      if (!touched || match.over) return SV.clear('scopa');
+      SV.save('scopa', { match: match, state: state.ended ? null : state });
+    }
+
+    function restore(saved) {
+      match = saved.match;
+      if (!saved.state) return startNewRound();
+      state = saved.state;
+      choosing = null;
+      preview = null;
+      busy = false;
+      note = 'Partita ripresa. ' + (state.turn === HUMAN ? 'Tocca a te.' : 'Tocca all\'avversario.');
       render();
       nextTurn();
     }
@@ -275,11 +299,12 @@
         const card = state.hands[CPU].find(function (x) { return x.id === c.cardId; });
         preview = { card: card, takeIds: c.takeIds };
         note = 'L\'avversario gioca ' + D.cardName(card) + (c.takeIds.length ? ' e prende…' : '.');
-        if (A) A.sfx.place();
+        if (A) A.sfx.card();
         render();
         later(function () {
           preview = null;
           const r = play(state, CPU, c.cardId, c.takeIds);
+          if (A && r.taken.length) A.sfx.take();
           if (A && r.scopa) A.sfx.lose();
           note = describe(state.last) + (state.ended ? '' : ' Tocca a te.');
           busy = false;
@@ -296,7 +321,11 @@
         return;
       }
       choosing = null;
-      if (A) r.scopa ? A.sfx.win() : (r.taken.length ? A.sfx.ok() : A.sfx.place());
+      if (A) {
+        if (r.taken.length) A.sfx.take();
+        else A.sfx.card();
+        if (r.scopa) A.sfx.win();
+      }
       note = describe(state.last);
       render();
       nextTurn();
@@ -428,13 +457,23 @@
       root.appendChild(U.el('div', { class: 'hint', text: 'Tocca una carta per giocarla. Se puoi prendere, devi prendere.' }));
     }
 
-    startNewRound();
+    const saved = SV.load('scopa');
+    let asking = !!saved;
+    if (saved) {
+      SV.ask(root, 'Scopa: tu ' + saved.match.scores[0] + ', avversario ' + saved.match.scores[1] + '. Mano ' + saved.match.round + '.',
+        function () { asking = false; restore(saved); },
+        function () { asking = false; SV.clear('scopa'); startNewRound(); });
+    } else {
+      startNewRound();
+    }
 
     return {
       destroy: function () {
+        persist();
         alive = false;
         timers.forEach(clearTimeout);
       },
+      save: persist,
       debug: {
         get state() { return state; },
         get match() { return match; },

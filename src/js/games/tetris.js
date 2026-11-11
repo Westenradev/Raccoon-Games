@@ -8,6 +8,7 @@
   const U = isNode ? require('../core/util.js') : window.RA.modules.util;
   const AR = isNode ? require('../core/arcade.js') : window.RA.modules.arcade;
   const A = isNode ? null : window.RA.audio;
+  const SV = isNode ? null : window.RA.modules.saves;
 
   const W = 10;
   const H = 20;
@@ -331,6 +332,7 @@
     let state = newGame(1);
     let started = false;
     let lastPiece = null;
+    let waiting = true; // a saved game may still be waiting for "resume or new"
     const fx = { flashes: [], sparks: [] };
     // Time until a held key repeats, per direction.
     const hold = { left: 0, right: 0, down: 0 };
@@ -364,12 +366,24 @@
       AR.overlay(wrap, 'PARTITA FINITA', 'Punti: ' + state.score + '. Righe: ' + state.lines + '. Record: ' + best.get() + '.', 'GIOCA ANCORA', newRun);
     }
 
-    function newRun() {
-      state = newGame(Math.floor(Math.random() * 1e9));
+    function begin(next) {
+      state = next;
+      waiting = false;
       started = true;
       fx.flashes = [];
       fx.sparks = [];
       hold.left = hold.right = hold.down = 0;
+    }
+
+    function newRun() {
+      begin(newGame(Math.floor(Math.random() * 1e9)));
+    }
+
+    // What is kept of a game that the player leaves.
+    function persist() {
+      if (waiting) return;
+      if (!started || state.over) return SV.clear('tetris');
+      SV.save('tetris', { board: state.board, bag: state.bag, cur: state.cur, next: state.next, score: state.score, lines: state.lines, level: state.level });
     }
 
     function frame(dt) {
@@ -417,14 +431,26 @@
     });
     const loop = AR.startLoop(frame, draw, { view: view, active: function () { return started && !state.over; } });
     AR.help(wrap, 'Frecce sinistra e destra: muovi. Freccia su: ruota. Freccia giù: scendi. Spazio: lascia cadere. P: pausa.');
-    AR.overlay(wrap, 'TETRIS', 'Incastra i pezzi e riempi le righe. Una riga piena sparisce.', 'INIZIA', newRun);
+    AR.startCard(wrap, {
+      id: 'tetris',
+      title: 'TETRIS',
+      body: 'Incastra i pezzi e riempi le righe. Una riga piena sparisce.',
+      summary: function (saved) { return 'Punti: ' + saved.score + '. Righe: ' + saved.lines + '. Livello: ' + saved.level + '.'; },
+      onResume: function (saved) {
+        begin(Object.assign(newGame(Math.floor(Math.random() * 1e9)), saved));
+        loop.getReady(1.5);
+      },
+      onNew: newRun,
+    });
 
     return {
       destroy: function () {
         best.submit(state.score);
+        persist();
         loop.stop();
         unbind();
       },
+      save: persist,
       debug: {
         get state() { return state; },
         get started() { return started; },

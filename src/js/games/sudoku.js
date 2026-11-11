@@ -7,6 +7,7 @@
   const isNode = typeof require === 'function';
   const U = isNode ? require('../core/util.js') : window.RA.modules.util;
   const A = isNode ? null : window.RA.audio;
+  const SV = isNode ? null : window.RA.modules.saves;
 
   // givens = numbers shown at the start. grade = the hardest step a player needs:
   // 0 = only "single" steps (one place for a number, or one number for a place),
@@ -268,6 +269,28 @@
       render();
     }
 
+    // ----- saved game -----
+    function persist() {
+      if (asking) return; // the saved game is still waiting for an answer
+      const touched = game && board.some(function (v, i) { return v !== game.puzzle[i]; });
+      if (won || !touched) return SV.clear('sudoku');
+      SV.save('sudoku', { game: game, board: board, level: level, mistakes: mistakes, hints: hints, elapsedMs: Date.now() - startedAt });
+    }
+
+    function restore(saved) {
+      game = saved.game;
+      board = saved.board;
+      level = saved.level;
+      mistakes = saved.mistakes;
+      hints = saved.hints;
+      selected = -1;
+      showErrors = false;
+      won = false;
+      endedAt = null;
+      startedAt = Date.now() - saved.elapsedMs; // the clock goes on from where it stopped
+      render();
+    }
+
     function checkWin() {
       if (!isSolved(board, game.solution)) return false;
       won = true;
@@ -404,13 +427,24 @@
     }
     document.addEventListener('keydown', onKey);
 
-    newGame();
+    const saved = SV.load('sudoku');
+    let asking = !!saved;
+    if (saved) {
+      const left = saved.board.filter(function (v) { return !v; }).length;
+      SV.ask(root, 'Sudoku ' + LEVELS[saved.level].label.toLowerCase() + ': mancano ' + left + ' caselle.',
+        function () { asking = false; restore(saved); },
+        function () { asking = false; SV.clear('sudoku'); newGame(); });
+    } else {
+      newGame();
+    }
     return {
       destroy: function () {
+        persist();
         alive = false;
         clearInterval(clock);
         document.removeEventListener('keydown', onKey);
       },
+      save: persist,
       debug: {
         get game() { return game; },
         get board() { return board; },

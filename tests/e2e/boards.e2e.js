@@ -1604,6 +1604,8 @@ async function testDama() {
   const t0 = Date.now();
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1120, height: 812 }, deviceScaleFactor: 1 });
+  // Saved games are tested in saves.e2e.js. Here every game must start fresh.
+  await context.addInitScript(() => { try { localStorage.setItem('ra.saves.off', 'true'); } catch (e) { /* no storage */ } });
   page = await context.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));

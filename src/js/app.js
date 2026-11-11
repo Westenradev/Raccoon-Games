@@ -118,6 +118,8 @@
             openGame(id);
           },
         }, thumb,
+        // A game that was left in the middle waits here to be taken up again.
+        M.saves.has(id) ? U.el('div', { class: 'tile-badge', text: 'Partita in sospeso' }) : null,
         U.el('div', { class: 'tile-title', text: mod.meta.title }),
         U.el('div', { class: 'tile-desc', text: mod.meta.desc })));
       });
@@ -157,6 +159,13 @@
     setMuteLabel();
     muteBtn.blur();
   });
+
+  // Closing the app (or reloading the page) keeps the game in progress, like the Menu button.
+  const saveCurrent = function () {
+    if (current && current.save) current.save();
+  };
+  window.addEventListener('beforeunload', saveCurrent);
+  window.addEventListener('pagehide', saveCurrent);
 
   // Escape returns to the menu from any game.
   window.addEventListener('keydown', function (e) {

@@ -148,7 +148,7 @@ const GAMES = {
   },
   async snake(page) {
     await page.locator('.overlay button.big').click();
-    // A small bot goes to each fish, so the picture shows a longer tail.
+    // A small bot goes to each fruit, so the picture shows a longer tail.
     await page.evaluate(() => new Promise((resolve) => {
       const send = (key) => {
         window.dispatchEvent(new KeyboardEvent('keydown', { key: key, bubbles: true }));
@@ -182,6 +182,8 @@ const GAMES = {
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+  // No saved games here: every picture starts from a new game.
+  await page.addInitScript(() => { try { localStorage.setItem('ra.saves.off', 'true'); } catch (e) { /* no storage */ } });
   await page.goto(URL);
   await page.waitForSelector('.tile');
   await page.screenshot({ path: path.join(OUT, '00-menu.png') });

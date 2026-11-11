@@ -11,6 +11,7 @@
   const U = isNode ? require('../core/util.js') : window.RA.modules.util;
   const AR = isNode ? require('../core/arcade.js') : window.RA.modules.arcade;
   const A = isNode ? null : window.RA.audio;
+  const SV = isNode ? null : window.RA.modules.saves;
 
   const W = 21;
   const H = 15;
@@ -533,6 +534,8 @@
     let state = newGame(seedBase, 1);
     let started = false;
     let clock = 0;
+    let waiting = true; // a saved game may still be waiting for "resume or new"
+    let between = null; // { level, score, lives } while the card between two levels is shown
 
     function draw() {
       paint(g, state, best.get(), clock, started && state.freeze > 0 && !state.over);
@@ -566,6 +569,7 @@
         const level = state.level + 1;
         const score = state.score;
         const lives = state.lives;
+        between = { level: level, score: score, lives: lives };
         AR.overlay(wrap, 'LIVELLO SUPERATO', 'Punti: ' + score + '. Record: ' + hi + '.', 'LIVELLO ' + level, function () { startLevel(level, score, lives); });
       } else {
         if (A) A.sfx.lose();
@@ -576,7 +580,39 @@
     function startLevel(level, score, lives) {
       seedBase += 1;
       state = newGame(seedBase, level, score, lives);
+      waiting = false;
+      between = null;
       started = true;
+    }
+
+    // What is kept of a game that the player leaves. The maze comes back from its seed.
+    function persist() {
+      if (waiting) return;
+      if (between) return SV.save('pacman', { between: between, score: between.score, level: between.level, lives: between.lives });
+      if (!started || state.over) return SV.clear('pacman');
+      SV.save('pacman', {
+        seed: state.seed, level: state.level, score: state.score, lives: state.lives, grid: state.grid,
+        acornsLeft: state.acornsLeft, pac: { x: state.pac.x, y: state.pac.y, dir: state.pac.dir },
+        ghosts: state.ghosts.map(function (gh) { return { x: gh.x, y: gh.y, dir: gh.dir, eaten: gh.eaten, wait: gh.wait, brave: !!gh.brave }; }),
+        scared: state.scared, eatChain: state.eatChain, modeClock: state.modeClock,
+      });
+    }
+
+    function resume(saved) {
+      if (saved.between) return startLevel(saved.between.level, saved.between.score, saved.between.lives);
+      const s = newGame(saved.seed, saved.level, saved.score, saved.lives);
+      s.grid = saved.grid;
+      s.acornsLeft = saved.acornsLeft;
+      Object.assign(s.pac, saved.pac);
+      saved.ghosts.forEach(function (gh, i) { if (s.ghosts[i]) Object.assign(s.ghosts[i], gh); });
+      s.scared = saved.scared;
+      s.eatChain = saved.eatChain;
+      s.modeClock = saved.modeClock;
+      seedBase = saved.seed;
+      state = s;
+      waiting = false;
+      between = null;
+      started = true; // newGame starts with the "PRONTI!" pause
     }
 
     const KEY_DIR = { arrowup: 'up', w: 'up', arrowdown: 'down', s: 'down', arrowleft: 'left', a: 'left', arrowright: 'right', d: 'right' };
@@ -585,13 +621,22 @@
     });
     const loop = AR.startLoop(frame, draw, { view: view, active: function () { return started && !state.over; } });
     AR.help(wrap, 'Usa le quattro frecce per muoverti nel labirinto. P: pausa.');
-    AR.overlay(wrap, 'RACCOON-MAN', 'Mangia tutti i puntini. I fantasmi ti inseguono. Il puntino grosso li spaventa: allora puoi mangiarli.', 'INIZIA', function () { startLevel(1, 0, 3); });
+    AR.startCard(wrap, {
+      id: 'pacman',
+      title: 'RACCOON-MAN',
+      body: 'Mangia tutti i puntini. I fantasmi ti inseguono. Il puntino grosso li spaventa: allora puoi mangiarli.',
+      summary: function (saved) { return 'Punti: ' + saved.score + '. Livello: ' + saved.level + '. Vite: ' + saved.lives + '.'; },
+      onResume: resume,
+      onNew: function () { startLevel(1, 0, 3); },
+    });
     return {
       destroy: function () {
         best.submit(state.score);
+        persist();
         loop.stop();
         unbind();
       },
+      save: persist,
       debug: {
         get state() { return state; },
         get started() { return started; },

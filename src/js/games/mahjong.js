@@ -10,6 +10,7 @@
   const isNode = typeof require === 'function';
   const U = isNode ? require('../core/util.js') : window.RA.modules.util;
   const A = isNode ? null : window.RA.audio;
+  const SV = isNode ? null : window.RA.modules.saves;
 
   // ---------- Layout ----------
   // Positions are in half tiles: a tile at (x, y) covers x..x+2 and y..y+2.
@@ -290,6 +291,26 @@
       render();
     }
 
+    // ----- saved game -----
+    function persist() {
+      if (asking) return; // the saved game is still waiting for an answer
+      if (endedAt || !history.length) return SV.clear('mahjong');
+      SV.save('mahjong', { tiles: tiles, history: history, score: score, elapsedMs: Date.now() - startedAt });
+    }
+
+    function restore(saved) {
+      tiles = saved.tiles;
+      history = saved.history;
+      score = saved.score;
+      selected = null;
+      hintPair = null;
+      endedAt = null;
+      startedAt = Date.now() - saved.elapsedMs; // the clock goes on from where it stopped
+      note = 'Partita ripresa da dove l\'avevi lasciata.';
+      stuck = !findPair(tiles);
+      render();
+    }
+
     function afterChange() {
       selected = null;
       hintPair = null;
@@ -312,7 +333,7 @@
       hintPair = null;
       if (!selected) {
         selected = tile;
-        if (A) A.sfx.click();
+        if (A) A.sfx.knock();
         return render();
       }
       if (selected === tile) {
@@ -321,7 +342,7 @@
       }
       if (selected.type !== tile.type) {
         selected = tile;
-        if (A) A.sfx.click();
+        if (A) A.sfx.knock();
         return render();
       }
       history.push([selected, tile]);
@@ -434,14 +455,24 @@
     }
 
     window.addEventListener('resize', fit);
-    newGame();
+    const saved = SV.load('mahjong');
+    let asking = !!saved;
+    if (saved) {
+      SV.ask(root, 'Mahjong: restano ' + saved.tiles.length / 2 + ' coppie. Punti: ' + saved.score + '.',
+        function () { asking = false; restore(saved); },
+        function () { asking = false; SV.clear('mahjong'); newGame(); });
+    } else {
+      newGame();
+    }
     return {
       destroy: function () {
+        persist();
         alive = false;
         clearInterval(clock);
         window.removeEventListener('resize', fit);
         if (A) A.stopAmbient();
       },
+      save: persist,
       debug: {
         get tiles() { return tiles; },
         get won() { return !!endedAt; },

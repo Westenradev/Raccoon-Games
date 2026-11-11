@@ -10,6 +10,7 @@
   const U = isNode ? require('../core/util.js') : window.RA.modules.util;
   const AR = isNode ? require('../core/arcade.js') : window.RA.modules.arcade;
   const A = isNode ? null : window.RA.audio;
+  const SV = isNode ? null : window.RA.modules.saves;
 
   const R = 18; // bubble radius
   const WIDTH = 360;
@@ -399,6 +400,8 @@
     let started = false;
     let particles = [];
     let aimHeld = 0;
+    let waiting = true; // a saved game may still be waiting for "resume or new"
+    let between = null; // { level, score } while the card between two levels is shown
 
     function draw() {
       paint(g, state, best.get(), { particles: particles, aim: started });
@@ -442,6 +445,7 @@
         if (A) A.sfx.win();
         const next = state.level + 1;
         const score = state.score;
+        between = { level: next, score: score };
         AR.overlay(wrap, 'LIVELLO ' + state.level + ' FINITO', 'Punti: ' + score + ' (100 di premio).', 'LIVELLO ' + next, function () { startLevel(next, score); });
       } else {
         if (A) A.sfx.lose();
@@ -452,6 +456,33 @@
     function startLevel(level, score) {
       state = newGame(Math.floor(Math.random() * 1e9), level, score);
       particles = [];
+      waiting = false;
+      between = null;
+      started = true;
+    }
+
+    // What is kept of a game that the player leaves. A bubble in flight goes back in the launcher.
+    function persist() {
+      if (waiting) return;
+      if (between) return SV.save('bubbles', { between: between, score: between.score, level: between.level });
+      if (!started || state.over) return SV.clear('bubbles');
+      const flying = state.moving;
+      SV.save('bubbles', {
+        level: state.level, kinds: state.kinds, grid: Array.from(state.grid.entries()), base: state.base, angle: state.angle,
+        cur: flying ? flying.kind : state.cur, next: flying ? state.cur : state.next,
+        shots: state.shots, rowsLeft: state.rowsLeft, score: state.score,
+      });
+    }
+
+    function resume(saved) {
+      if (saved.between) return startLevel(saved.between.level, saved.between.score);
+      const s = newGame(Math.floor(Math.random() * 1e9), saved.level, saved.score);
+      s.grid = new Map(saved.grid);
+      ['kinds', 'base', 'angle', 'cur', 'next', 'shots', 'rowsLeft'].forEach(function (k) { s[k] = saved[k]; });
+      state = s;
+      particles = [];
+      waiting = false;
+      between = null;
       started = true;
     }
 
@@ -481,15 +512,24 @@
     });
     const loop = AR.startLoop(frame, draw, { view: view, active: function () { return started && !state.over; } });
     AR.help(wrap, 'Mira con il mouse e fai clic per tirare. Oppure: frecce sinistra e destra per mirare, Spazio per tirare. P: pausa.');
-    AR.overlay(wrap, 'BOLLE', 'Unisci tre bolle dello stesso colore per farle scoppiare. Non farle scendere sotto la linea rossa.', 'INIZIA', function () { startLevel(1, 0); });
+    AR.startCard(wrap, {
+      id: 'bubbles',
+      title: 'BOLLE',
+      body: 'Unisci tre bolle dello stesso colore per farle scoppiare. Non farle scendere sotto la linea rossa.',
+      summary: function (saved) { return 'Punti: ' + saved.score + '. Livello: ' + saved.level + '.'; },
+      onResume: resume,
+      onNew: function () { startLevel(1, 0); },
+    });
     return {
       destroy: function () {
         best.submit(state.score);
+        persist();
         container.removeEventListener('mousemove', onMove);
         container.removeEventListener('mousedown', onDown);
         loop.stop();
         unbind();
       },
+      save: persist,
       debug: {
         get state() { return state; },
         get started() { return started; },

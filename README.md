@@ -21,9 +21,9 @@ Sala giochi:
 |---|---|
 | Tetris | I sette pezzi classici con i colori standard. |
 | Bolle | Tre bolle dello stesso colore scoppiano. |
-| Raccoon Defender | Nello stile di Space Invaders del 1978. |
+| Raccoon Defender | Nello stile di Space Invaders: invasori a colori, ripari e un disco volante che vale punti extra. |
 | Raccoon-man | Nello stile di Pac-Man: labirinto, puntini e fantasmi. |
-| Snake | Il serpente dei vecchi telefonini. |
+| Snake | Un serpente a strisce in un prato: mangia la frutta e cresce. |
 
 Le fonti delle immagini e dei caratteri sono in [CREDITS.md](CREDITS.md).
 
@@ -57,7 +57,7 @@ Esegui i test delle regole (50 test, con bot che giocano partite intere):
 npm test
 ```
 
-Esegui le prove nel browser: giocano tutti i giochi con clic e tasti veri. Durano circa 10 minuti e richiedono Playwright:
+Esegui le prove nel browser: giocano tutti i giochi con clic e tasti veri, e controllano anche le partite salvate. Durano circa 10 minuti e richiedono Playwright:
 
 ```bash
 npm run test:e2e
@@ -82,7 +82,7 @@ Il file finale finisce nella cartella `dist/`.
 - `main.js`: finestra Electron.
 - `src/index.html`, `src/css/style.css`: pagina e stile.
 - `src/assets/`: carte piacentine e caratteri.
-- `src/js/core/`: utilità, audio, base per i giochi a canvas.
+- `src/js/core/`: utilità, audio, partite salvate, base per i giochi a canvas.
 - `src/js/games/`: un file per gioco, con regole e interfaccia.
 - `tests/`: test automatici delle regole. `tests/e2e/`: prove nel browser.
 - `.github/workflows/build-mac.yml`: crea il `.dmg` su un runner macOS M1.
@@ -94,3 +94,10 @@ Il file finale finisce nella cartella `dist/`.
 - Nei giochi della sala giochi si usano le frecce e la barra spaziatrice. Il tasto Invio avvia la partita.
 - Il tasto **P** mette in pausa. Il gioco va in pausa da solo quando si passa a un'altra finestra.
 - I record si salvano appena vengono battuti.
+
+## Partite salvate
+
+- Ogni gioco salva da solo la partita in corso quando si torna al menu o si chiude l'app.
+- Nel menu, il gioco con una partita lasciata a metà mostra la scritta **Partita in sospeso**.
+- Alla riapertura il gioco chiede: **Riprendi la partita** oppure **Inizia una nuova partita**.
+- Una partita finita non viene conservata.
