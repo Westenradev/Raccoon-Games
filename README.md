@@ -1,5 +1,3 @@
-# Raccoon Arcade
-
 <p align="center">
   <img src="build/icon.png" alt="Raccoon Arcade" width="140">
 </p>
