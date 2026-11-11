@@ -385,7 +385,7 @@
       const wrap = root.querySelector('.mj-wrap');
       const board = root.querySelector('.mj-board');
       if (!wrap || !board) return;
-      const availH = Math.max(300, window.innerHeight - 56 - 176);
+      const availH = Math.max(300, window.innerHeight - 56 - 196);
       const scale = Math.min(1.25, wrap.clientWidth / BOARD_W, availH / BOARD_H);
       board.style.transform = 'scale(' + scale + ')';
       board.style.marginLeft = (-BOARD_W / 2) + 'px';
