@@ -10,7 +10,9 @@
 // implementation written in this file (not the game's own modules).
 // Buttons and messages are matched by a key word, so small changes of the wording do not break the test.
 // Exit code 0 = all hard checks passed. "KNOWN" lines are defects that are already reported and
-// do not fail the run, unless --strict is given.
+// do not fail the run, unless --strict is given. (At the moment no check is marked as known.)
+// One exception to "read only": the block "two capture routes" in the Dama section places a position
+// by writing into debug.board, because that position cannot be reached on purpose in a normal game.
 'use strict';
 const path = require('path');
 const fs = require('fs');
@@ -100,7 +102,7 @@ const clickBtn = (scope, re) => page.locator(scope + ' button', { hasText: re })
 // Checks that the page does not need scrolling at the main window size (1120 x 812).
 async function checkFits(name) {
   const m = await page.evaluate(() => ({ sh: document.documentElement.scrollHeight, ch: document.documentElement.clientHeight, sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
-  knownBug(m.sh <= m.ch, name + ': the game is taller than the 1120 x 812 window, so the bottom is cut off until the user scrolls');
+  ok(m.sh <= m.ch, name + ': the game fits in the 1120 x 812 window without scrolling (it is ' + (m.sh - m.ch) + ' px too tall)');
   ok(m.sw <= m.cw, name + ': no horizontal overflow at 1120 x 812');
   return m.sh - m.ch;
 }
@@ -153,6 +155,58 @@ function sudokuCount(grid, limit) {
   rec();
   return count;
 }
+// Independent grading with human steps. Returns 0 when "single" steps are enough (one number for a
+// cell, one cell for a number), 1 when locked numbers or pairs are needed too, 2 when even those fail.
+function sudokuGrade(puzzle) {
+  const units = [];
+  for (let k = 0; k < 9; k++) {
+    units.push(Array.from({ length: 9 }, (_, j) => k * 9 + j));
+    units.push(Array.from({ length: 9 }, (_, j) => j * 9 + k));
+    units.push(Array.from({ length: 9 }, (_, j) => (Math.floor(k / 3) * 3 + Math.floor(j / 3)) * 9 + (k % 3) * 3 + (j % 3)));
+  }
+  const peersOf = (i) => units.filter((u) => u.indexOf(i) >= 0).reduce((all, u) => all.concat(u), []).filter((x) => x !== i);
+  const b = puzzle.slice();
+  const cand = b.map((v, i) => {
+    const set = new Set();
+    if (!v) for (let d = 1; d <= 9; d++) if (peersOf(i).every((q) => b[q] !== d)) set.add(d);
+    return set;
+  });
+  const put = (i, d) => { b[i] = d; cand[i].clear(); peersOf(i).forEach((q) => cand[q].delete(d)); };
+  let level = 0;
+  for (let guard = 0; guard < 500; guard++) {
+    if (b.every((v) => v)) return level;
+    let moved = false;
+    for (let i = 0; i < 81 && !moved; i++) if (!b[i] && cand[i].size === 1) { put(i, Array.from(cand[i])[0]); moved = true; }
+    for (const u of units) {
+      for (let d = 1; d <= 9 && !moved; d++) {
+        const spots = u.filter((i) => cand[i].has(d));
+        if (spots.length === 1) { put(spots[0], d); moved = true; }
+      }
+    }
+    if (moved) continue;
+    let cut = false;
+    for (const u of units) {
+      for (let d = 1; d <= 9; d++) { // locked numbers
+        const spots = u.filter((i) => cand[i].has(d));
+        if (spots.length < 2 || spots.length > 3) continue;
+        for (const o of units) {
+          if (o === u || !spots.every((i) => o.indexOf(i) >= 0)) continue;
+          o.forEach((i) => { if (spots.indexOf(i) < 0 && cand[i].has(d)) { cand[i].delete(d); cut = true; } });
+        }
+      }
+      for (let x = 0; x < 9; x++) { // pairs
+        for (let y = x + 1; y < 9; y++) {
+          const A = cand[u[x]]; const B = cand[u[y]];
+          if (A.size !== 2 || B.size !== 2 || !Array.from(A).every((d) => B.has(d))) continue;
+          u.forEach((i, k) => { if (k !== x && k !== y) A.forEach((d) => { if (cand[i].has(d)) { cand[i].delete(d); cut = true; } }); });
+        }
+      }
+    }
+    if (!cut) return 2;
+    level = 1;
+  }
+  return 2;
+}
 function validSolution(s) {
   const units = [];
   for (let k = 0; k < 9; k++) {
@@ -178,7 +232,9 @@ function checkSudokuDom(st, label) {
   ok(st.pad.length === 10 && st.pad.slice(0, 9).every((b, k) => {
     const left = Math.max(0, 9 - counts[k + 1]);
     const shown = (b.title.match(/\d+/) || [null])[0];
-    return b.t.charAt(0) === String(k + 1) && b.done === (left === 0) && shown === String(left) && (b.small === null || ((b.small.match(/\d+/) || [String(left)])[0] === String(left)));
+    // the small label on the key: "ancora N" while numbers are missing, "fatto" when all nine are placed
+    const label = b.small === null ? true : left === 0 ? /fatto/i.test(b.small) : (b.small.match(/\d+/) || [''])[0] === String(left);
+    return b.t.charAt(0) === String(k + 1) && b.done === (left === 0) && shown === String(left) && label;
   }), 'sudoku ' + label + ': number pad shows 1-9, each with the right count of missing numbers');
 }
 const cellSel = (i) => '.sudoku-grid .cell[data-i="' + i + '"]';
@@ -202,6 +258,11 @@ async function sudokuLevel(levelKey, levelLabel, expectGivens, stats) {
   ok(st.puzzle.every((v, i) => (v === 0) === !st.givens[i] && (v === 0 || v === st.solution[i])), 'sudoku ' + tag + ': givens agree with the solution');
   ok(validSolution(st.solution), 'sudoku ' + tag + ': debug solution is a valid grid');
   eq(sudokuCount(st.puzzle, 2), 1, 'sudoku ' + tag + ': puzzle has exactly one solution (independent solver)');
+  // Facile and Medio need single steps only; Difficile needs pairs or locked numbers, never guessing.
+  const graded = sudokuGrade(st.puzzle);
+  stats.grades[levelKey] = graded;
+  eq(graded, levelKey === 'difficile' ? 1 : 0, 'sudoku ' + tag + ': difficulty by human steps (0 singles, 1 pairs/locked numbers, 2 not solvable that way)');
+  ok(/tastiera/i.test(st.msg), 'sudoku ' + tag + ': the help line mentions the keyboard ("' + st.msg + '")');
   eq([st.clock, st.errors, st.hints], ['0:00', 0, 0], 'sudoku ' + tag + ': clock and counters start at zero');
   ok(st.actions.length === 3 && /Mostra/i.test(st.actions[0]) && RE_ERRORS.test(st.actions[0]) && RE_HINT.test(st.actions[1]) && RE_NEW_SUDOKU.test(st.actions[2]), 'sudoku ' + tag + ': action buttons (show errors, hint, new)');
   const sol = st.solution;
@@ -263,7 +324,7 @@ async function sudokuLevel(levelKey, levelLabel, expectGivens, stats) {
       cell.classList.add('sel');
       return withSel === without;
     }, a);
-    knownBug(!sameLook, 'sudoku: with errors shown, a selected wrong cell looks exactly like an unselected wrong cell (the error colour hides the selection colour)');
+    ok(!sameLook, 'sudoku: with errors shown, a selected wrong cell still looks different from an unselected wrong cell');
   }
   await padClick(0);
   st = await sudokuState();
@@ -377,10 +438,21 @@ async function sudokuLevel(levelKey, levelLabel, expectGivens, stats) {
 
 async function testSudoku() {
   console.log('SUDOKU');
-  const stats = { solved: 0, givens: {} };
+  const stats = { solved: 0, givens: {}, grades: {} };
   await openFromMenu('Sudoku', '.sudoku-grid .cell');
   stats.overflow = await checkFits('sudoku');
   await shot('sudoku-start');
+  // the number pad: nine keys and the erase key, all inside the window and not on top of the grid
+  const padBox = await page.evaluate(() => {
+    const g = document.querySelector('.sudoku-grid').getBoundingClientRect();
+    const keys = Array.from(document.querySelectorAll('.pad .btn.num')).map((b) => { const r = b.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom, w: r.width, h: r.height, clipped: b.scrollWidth > b.clientWidth + 1 || b.scrollHeight > b.clientHeight + 1 }; });
+    return { grid: { l: g.left, r: g.right, t: g.top, b: g.bottom }, keys: keys, vw: window.innerWidth, vh: window.innerHeight };
+  });
+  ok(padBox.keys.length === 10 && padBox.keys.every((k) => k.l >= 0 && k.r <= padBox.vw && k.t >= 0 && k.b <= padBox.vh), 'sudoku: all ten pad keys are inside the window');
+  ok(padBox.keys.every((k) => k.r <= padBox.grid.l || k.l >= padBox.grid.r || k.b <= padBox.grid.t || k.t >= padBox.grid.b), 'sudoku: the pad does not overlap the grid');
+  ok(padBox.keys.every((k) => !k.clipped), 'sudoku: no pad key has clipped text');
+  ok(padBox.keys.slice(0, 9).every((k) => k.w >= 44 && k.h >= 44), 'sudoku: number keys are at least 44 px (smallest ' + Math.round(Math.min.apply(null, padBox.keys.slice(0, 9).map((k) => Math.min(k.w, k.h)))) + ' px)');
+  stats.key = Math.round(padBox.keys[0].w) + ' x ' + Math.round(padBox.keys[0].h);
   // clock runs
   await page.waitForFunction(() => document.querySelector('.sudoku .clock').textContent === '0:01', null, { timeout: 3000 }).then(() => ok(true, 'clock'), () => ok(false, 'sudoku: the clock reaches 0:01 after one second'));
   // keyboard with nothing selected: digits do nothing, an arrow selects the centre cell
@@ -420,7 +492,7 @@ async function testSudoku() {
   eq((await sudokuState()).level, 'medio', 'sudoku: the level is remembered after going back to the menu');
   await page.click('#home');
   await waitMenu();
-  console.log('  solved ' + stats.solved + ' puzzles; givens ' + JSON.stringify(stats.givens));
+  console.log('  solved ' + stats.solved + ' puzzles; givens ' + JSON.stringify(stats.givens) + '; grades ' + JSON.stringify(stats.grades) + '; pad key ' + stats.key + ' px');
   return stats;
 }
 
@@ -428,7 +500,14 @@ async function testSudoku() {
 // MAHJONG
 // =====================================================================================
 // Tiles are { id, x, y, l, type, face }. x and y are in half tiles: a tile covers x..x+2 and y..y+2.
-const mjState = () => page.evaluate(() => {
+// Kind and picture of every tile seen so far, by id (kept for tiles that were removed).
+const mjKinds = {};
+const mjState = async () => {
+  const st = await mjRead();
+  st.tiles.forEach((t) => { mjKinds[t.id] = { type: t.type, face: t.face }; });
+  return st;
+};
+const mjRead = () => page.evaluate(() => {
   const d = window.RA.current.debug;
   const q = (s) => Array.from(document.querySelectorAll(s));
   const ov = document.querySelector('.mahjong .overlay');
@@ -602,14 +681,27 @@ async function mjFreshDealChecks(label) {
     return true;
   }), 'mahjong ' + label + ': a click on the centre of a tile reaches that tile, or the tile lying on it');
   ok(hit.every((h) => h.left >= 0 && h.right <= view.width && h.top >= 0), 'mahjong ' + label + ': no tile is cut off at the left, right or top edge');
-  knownBug(hit.every((h) => h.bottom <= view.height), 'mahjong: some tiles are below the bottom edge of the 1120 x 812 window');
+  ok(hit.every((h) => h.bottom <= view.height), 'mahjong ' + label + ': no tile is below the bottom edge of the window');
   return { st: st, tileW: Math.round(hit[0].w), tileH: Math.round(hit[0].h) };
 }
 
+// expect = { score, stack }: the score the page must show and the pairs removed so far (newest last).
 async function mjPlayPair(pair, expect) {
   await clickTile(pair[0]);
   await clickTile(pair[1]);
   expect.score += 10;
+  expect.stack.push(pair);
+}
+// "Annulla mossa": puts the last removed pair back and takes 10 points away (never below zero).
+async function mjUndo(expect) {
+  await clickBtn('.mahjong .actions', RE_MJ_UNDO);
+  const pair = expect.stack.pop();
+  if (pair) expect.score = Math.max(0, expect.score - 10);
+  return pair || null;
+}
+function mjReset(expect) {
+  expect.score = 0;
+  expect.stack = [];
 }
 
 async function mjWinChecks(expect, label) {
@@ -631,38 +723,57 @@ async function mjWinChecks(expect, label) {
   });
   ok(blockedByOverlay, 'mahjong ' + label + ': the win overlay covers the action buttons');
   await page.click('.mahjong .overlay .btn.big');
-  expect.score = 0;
+  mjReset(expect);
   const fresh = await mjState();
   ok(fresh.tiles.length === 144 && !fresh.won && !fresh.overlay && fresh.score === 0, 'mahjong ' + label + ': "Nuova partita" in the overlay deals a new game');
 }
 
+// Presses Mescola and checks everything it promises. Returns the number of pairs it put back
+// (0 = plain shuffle; more when the tiles left could not be cleared, e.g. two tiles one on the other).
+async function mjShuffle(expect, label, stats) {
+  const before = await mjState();
+  const kindsBefore = Object.assign({}, mjKinds);
+  await clickBtn('.mahjong .actions', RE_MJ_SHUFFLE);
+  stats.shuffles += 1;
+  const st = await mjState();
+  ok(!RE_MJ_DEAD.test(st.msg), 'mahjong ' + label + ': Mescola never ends the game with "non si possono più liberare"');
+  const m = st.msg.match(/rimesso (\d+) coppi([ae])\b/);
+  const undone = m ? Number(m[1]) : 0;
+  if (m) {
+    stats.rescues += 1;
+    ok(undone >= 1 && (undone === 1) === (m[2] === 'a'), 'mahjong ' + label + ': the message counts the pairs put back, with the right singular/plural ("' + st.msg + '")');
+  } else {
+    ok(/mescolate/i.test(st.msg), 'mahjong ' + label + ': Mescola message ("' + st.msg + '")');
+  }
+  const back = [];
+  for (let k = 0; k < undone; k++) {
+    const pair = expect.stack.pop();
+    if (pair) back.push(pair[0], pair[1]);
+    expect.score = Math.max(0, expect.score - 10);
+  }
+  eq(sortNum(st.tiles.map((t) => t.id)), sortNum(before.tiles.map((t) => t.id).concat(back)), 'mahjong ' + label + ': Mescola keeps all tiles' + (undone ? ' and puts back exactly the last ' + undone + ' removed pair(s)' : ''));
+  const now = {};
+  st.tiles.forEach((t) => { now[t.id] = t; });
+  ok(before.tiles.every((t) => now[t.id] && now[t.id].x === t.x && now[t.id].y === t.y && now[t.id].l === t.l), 'mahjong ' + label + ': Mescola keeps every tile in its place');
+  eq(sortNum(st.tiles.map((t) => t.type)), sortNum(st.tiles.map((t) => kindsBefore[t.id].type)), 'mahjong ' + label + ': Mescola keeps the same kinds');
+  eq(st.tiles.map((t) => String(t.face)).sort(), st.tiles.map((t) => String(kindsBefore[t.id].face)).sort(), 'mahjong ' + label + ': Mescola keeps the same pictures');
+  ok(!!st.pair && !st.stuck && st.pulse.length === 0, 'mahjong ' + label + ': after Mescola a free pair exists and the button stops pulsing');
+  ok(mjPlan(st.tiles, 'clear', 3000) !== null, 'mahjong ' + label + ': after Mescola the board can be cleared (independent search)');
+  mjCheck(st, label + ' after Mescola', expect.score);
+  return undone;
+}
+
 // Plays the current position to the end. picker: 'greedy' (debug.findPair) or 'hint' (Suggerimento button).
-// Returns 'cleared' or 'dead'.
+// Returns 'cleared', or 'error' when a check failed in a way that stops the game.
 async function mjFinish(picker, expect, label, stats) {
-  for (let guard = 0; guard < 400; guard++) {
-    let st = await mjState();
+  for (let guard = 0; guard < 500; guard++) {
+    const st = await mjState();
     if (st.won) return 'cleared';
     if (!st.pair) {
       ok(st.stuck, 'mahjong ' + label + ': no free pair means stuck');
       stats.stuckSeen += 1;
-      const posBefore = st.tiles.map((t) => t.id + ':' + t.x + ',' + t.y + ',' + t.l).sort();
-      const typesBefore = sortNum(st.tiles.map((t) => t.type));
-      const facesBefore = st.tiles.map((t) => String(t.face)).sort();
-      await clickBtn('.mahjong .actions', RE_MJ_SHUFFLE);
-      stats.shuffles += 1;
-      st = await mjState();
-      eq(st.tiles.map((t) => t.id + ':' + t.x + ',' + t.y + ',' + t.l).sort(), posBefore, 'mahjong ' + label + ': Mescola keeps every tile in its place');
-      if (RE_MJ_DEAD.test(st.msg)) {
-        ok(st.stuck && !st.pair, 'mahjong ' + label + ': dead position stays stuck');
-        ok(mjPlan(st.tiles.map((t) => Object.assign({}, t, { type: 0 })), 'clear', 3000) === null, 'mahjong ' + label + ': Mescola gives up only when the shape really cannot be cleared');
-        return 'dead';
-      }
-      ok(/mescolate/i.test(st.msg), 'mahjong ' + label + ': Mescola message ("' + st.msg + '")');
-      eq(sortNum(st.tiles.map((t) => t.type)), typesBefore, 'mahjong ' + label + ': Mescola keeps the same kinds');
-      eq(st.tiles.map((t) => String(t.face)).sort(), facesBefore, 'mahjong ' + label + ': Mescola keeps the same pictures');
-      ok(!!st.pair && !st.stuck && st.pulse.length === 0, 'mahjong ' + label + ': after Mescola a free pair exists');
-      ok(mjPlan(st.tiles, 'clear', 3000) !== null, 'mahjong ' + label + ': after Mescola the board can be cleared (independent search)');
-      mjCheck(st, label + ' after Mescola', expect.score);
+      await mjShuffle(expect, label, stats);
+      if (!(await mjState()).pair) return 'error';
       continue;
     }
     if (picker === 'hint') {
@@ -683,8 +794,8 @@ async function mjFinish(picker, expect, label, stats) {
 
 async function testMahjong() {
   console.log('MAHJONG');
-  const stats = { cleared: 0, dead: 0, stuckSeen: 0, shuffles: 0, games: 0, deadReplayed: false };
-  const expect = { score: 0 };
+  const stats = { cleared: 0, rescues: 0, stuckSeen: 0, shuffles: 0, games: 0, deadReplayed: false };
+  const expect = { score: 0, stack: [] };
   await openFromMenu('Mahjong', '.mj-board .mj-tile');
   stats.overflow = await checkFits('mahjong');
   // sound off and on again while the ambient music is wanted
@@ -694,6 +805,13 @@ async function testMahjong() {
   ok(muteOff !== muteBefore && (await page.evaluate(() => window.RA.audio.isMuted())) === true, 'app: the sound button switches the sound off and changes its label ("' + muteBefore + '" -> "' + muteOff + '")');
   await page.click('#mute');
   ok((await page.locator('#mute').textContent()) === muteBefore && (await page.evaluate(() => window.RA.audio.isMuted())) === false, 'app: the sound button switches back');
+  // the four buttons are inside the window and not on top of the tiles
+  const bar = await page.evaluate(() => {
+    const board = Array.from(document.querySelectorAll('.mj-board .mj-tile')).map((e) => e.getBoundingClientRect());
+    const top = Math.min.apply(null, board.map((r) => r.top));
+    return Array.from(document.querySelectorAll('.mahjong .actions button')).map((b) => { const r = b.getBoundingClientRect(); return { t: b.textContent.trim(), inside: r.left >= 0 && r.right <= window.innerWidth && r.top >= 0 && r.bottom <= window.innerHeight, clear: r.bottom <= top }; });
+  });
+  ok(bar.length === 4 && bar.every((b) => b.inside && b.clear), 'mahjong: Suggerimento, Annulla, Mescola and Nuova partita are visible and do not cover the tiles (' + bar.map((b) => b.t).join(', ') + ')');
 
   // ---------- game 1: planned clear with side trips ----------
   let info = await mjFreshDealChecks('game 1');
@@ -732,7 +850,7 @@ async function testMahjong() {
     await clickTile(fb.id);
     eq(mjSelected(await mjState()), [], 'mahjong: clicking the selected tile again deselects it');
     // undo with nothing to undo
-    await clickBtn('.mahjong .actions', RE_MJ_UNDO);
+    await mjUndo(expect);
     s2 = await mjState();
     ok(s2.tiles.length === 144 && s2.score === 0, 'mahjong: Annulla with no moves does nothing');
     // hint
@@ -761,14 +879,12 @@ async function testMahjong() {
       if (k === 6) {
         // undo two moves, then play them again
         const beforeUndo = await mjState();
-        await clickBtn('.mahjong .actions', RE_MJ_UNDO);
-        expect.score -= 10;
+        await mjUndo(expect);
         s2 = await mjState();
         ok(s2.tiles.length === beforeUndo.tiles.length + 2 && s2.tiles.some((t) => t.id === pair[0]) && s2.tiles.some((t) => t.id === pair[1]), 'mahjong: Annulla puts the last pair back');
         ok(/annullata/i.test(s2.msg) || s2.stuck, 'mahjong: undo message ("' + s2.msg + '")');
         mjCheck(s2, 'game 1 after undo', expect.score);
-        await clickBtn('.mahjong .actions', RE_MJ_UNDO);
-        expect.score -= 10;
+        await mjUndo(expect);
         s2 = await mjState();
         eq(s2.tiles.length, beforeUndo.tiles.length + 4, 'mahjong: a second Annulla puts back the pair before');
         mjCheck(s2, 'game 1 after second undo', expect.score);
@@ -785,97 +901,113 @@ async function testMahjong() {
     ok(false, 'mahjong game 1: no clearing plan found');
   }
 
-  // ---------- game 2: reach the stuck state, undo out of it, Mescola, finish ----------
-  for (let attempt = 0; attempt < 6 && stats.cleared < 2; attempt++) {
-    info = await mjFreshDealChecks('game 2.' + attempt);
-    st = info.st;
-    stats.games += 1;
-    expect.score = 0;
-    const toStuck = attempt === 0 ? mjPlan(st.tiles, 'stuck', 400) : null;
-    if (toStuck) {
-      for (const pair of toStuck) await mjPlayPair(pair, expect);
-      const s2 = await mjState();
-      ok(s2.stuck && !s2.pair && s2.tiles.length > 0, 'mahjong: stuck state reached');
-      ok(/Non ci sono più coppie/i.test(s2.msg) && RE_MJ_SHUFFLE.test(s2.msg) && RE_MJ_UNDO.test(s2.msg), 'mahjong: stuck message names Mescola and Annulla ("' + s2.msg + '")');
-      ok(s2.pulse.length === 1 && RE_MJ_SHUFFLE.test(s2.pulse[0]), 'mahjong: the Mescola button pulses when stuck');
-      mjCheck(s2, 'game 2 stuck', expect.score);
-      await shot('mahjong-stuck');
-      stats.stuckSeen += 1;
-      await clickBtn('.mahjong .actions', RE_MJ_HINT); // no pair to show
-      let s3 = await mjState();
-      ok(s3.stuck && mjHinted(s3).length === 0 && s3.score === expect.score, 'mahjong: Suggerimento in a stuck position marks nothing and costs nothing');
-      await clickBtn('.mahjong .actions', RE_MJ_UNDO);
-      expect.score -= 10;
-      s3 = await mjState();
-      ok(!s3.stuck && s3.tiles.length === s2.tiles.length + 2 && s3.pulse.length === 0, 'mahjong: Annulla leaves the stuck state');
-      await mjPlayPair(toStuck[toStuck.length - 1], expect);
-      ok((await mjState()).stuck, 'mahjong: playing the same pair again is stuck again');
+  // ---------- game 2: reach the stuck state, undo out of it, Mescola, undo after Mescola, finish ----------
+  info = await mjFreshDealChecks('game 2');
+  st = info.st;
+  stats.games += 1;
+  mjReset(expect);
+  const toStuck = mjPlan(st.tiles, 'stuck', 400);
+  if (ok(toStuck !== null, 'mahjong game 2: a way into a stuck position was found')) {
+    for (const pair of toStuck) await mjPlayPair(pair, expect);
+    const s2 = await mjState();
+    ok(s2.stuck && !s2.pair && s2.tiles.length > 0, 'mahjong: stuck state reached');
+    ok(/Non ci sono più coppie/i.test(s2.msg) && RE_MJ_SHUFFLE.test(s2.msg) && RE_MJ_UNDO.test(s2.msg), 'mahjong: stuck message names Mescola and Annulla ("' + s2.msg + '")');
+    ok(s2.pulse.length === 1 && RE_MJ_SHUFFLE.test(s2.pulse[0]), 'mahjong: the Mescola button pulses when stuck');
+    mjCheck(s2, 'game 2 stuck', expect.score);
+    await shot('mahjong-stuck');
+    stats.stuckSeen += 1;
+    await clickBtn('.mahjong .actions', RE_MJ_HINT); // no pair to show
+    let s3 = await mjState();
+    ok(s3.stuck && mjHinted(s3).length === 0 && s3.score === expect.score, 'mahjong: Suggerimento in a stuck position marks nothing and costs nothing');
+    const lastPair = await mjUndo(expect);
+    s3 = await mjState();
+    ok(!s3.stuck && s3.tiles.length === s2.tiles.length + 2 && s3.pulse.length === 0, 'mahjong: Annulla leaves the stuck state');
+    await mjPlayPair(lastPair, expect);
+    ok((await mjState()).stuck, 'mahjong: playing the same pair again is stuck again');
+    // Mescola, then Annulla: the undo history survives the shuffle
+    const undone = await mjShuffle(expect, 'game 2', stats);
+    const afterShuffle = await mjState();
+    const wanted = expect.stack.length ? expect.stack[expect.stack.length - 1] : null;
+    const backPair = await mjUndo(expect);
+    s3 = await mjState();
+    if (wanted) {
+      ok(s3.tiles.length === afterShuffle.tiles.length + 2 && s3.tiles.some((t) => t.id === wanted[0]) && s3.tiles.some((t) => t.id === wanted[1]), 'mahjong: Annulla after Mescola puts back the pair removed before the shuffle (Mescola had put back ' + undone + ')');
+      ok(!!s3.pair && !s3.stuck, 'mahjong: after Mescola + Annulla a free pair exists');
+      ok(mjPlan(s3.tiles, 'clear', 3000) !== null, 'mahjong: after Mescola + Annulla the board can still be cleared (independent search)');
+      mjCheck(s3, 'game 2 after Mescola + Annulla', expect.score);
     }
-    const res = await mjFinish('greedy', expect, 'game 2.' + attempt, stats);
-    if (res === 'cleared') {
-      await mjWinChecks(expect, 'game 2.' + attempt);
-      stats.cleared += 1;
-    } else if (res === 'dead') {
-      stats.dead += 1;
-      await clickBtn('.mahjong .actions', RE_MJ_NEW);
-    } else break;
+    ok(backPair === wanted, 'mahjong: test bookkeeping of the undo history');
+  }
+  if ((await mjFinish('greedy', expect, 'game 2', stats)) === 'cleared') {
+    await mjWinChecks(expect, 'game 2');
+    stats.cleared += 1;
   }
 
   // ---------- game 3: only the Suggerimento button decides the moves ----------
-  for (let attempt = 0; attempt < 6 && stats.cleared < 3; attempt++) {
-    info = await mjFreshDealChecks('game 3.' + attempt);
-    stats.games += 1;
-    expect.score = 0;
-    if (attempt === 0) {
-      // Mescola on a fresh deal, and Annulla after it
-      const before = info.st;
-      await mjPlayPair(before.pair, expect);
-      await clickBtn('.mahjong .actions', RE_MJ_SHUFFLE);
-      stats.shuffles += 1;
-      let s2 = await mjState();
-      ok(/mescolate/i.test(s2.msg), 'mahjong: Mescola works in a position that is not stuck');
-      eq(s2.tiles.length, 142, 'mahjong: Mescola does not add or remove tiles');
-      mjCheck(s2, 'game 3 after early Mescola', expect.score);
-      await clickBtn('.mahjong .actions', RE_MJ_UNDO);
-      s2 = await mjState();
-      eq(s2.tiles.length, 142, 'mahjong: Annulla after Mescola does not bring back tiles of the old deal');
-    }
-    const res = await mjFinish('hint', expect, 'game 3.' + attempt, stats);
-    if (res === 'cleared') { await mjWinChecks(expect, 'game 3.' + attempt); stats.cleared += 1; } else if (res === 'dead') { stats.dead += 1; await clickBtn('.mahjong .actions', RE_MJ_NEW); } else break;
+  info = await mjFreshDealChecks('game 3');
+  stats.games += 1;
+  mjReset(expect);
+  {
+    // Mescola on a fresh deal after one pair, and Annulla after it
+    await mjPlayPair(info.st.pair, expect);
+    const undone = await mjShuffle(expect, 'game 3 early', stats);
+    eq(undone, 0, 'mahjong: Mescola in a position that is not stuck puts nothing back');
+    eq((await mjState()).tiles.length, 142, 'mahjong: Mescola does not add or remove tiles');
+    await mjUndo(expect);
+    const s2 = await mjState();
+    eq([s2.tiles.length, s2.score], [144, 0], 'mahjong: Annulla after an early Mescola brings the first pair back and takes its 10 points away');
+    mjCheck(s2, 'game 3 after early Mescola + Annulla', expect.score);
+    ok(mjPlan(s2.tiles, 'clear', 3000) !== null, 'mahjong: that board can still be cleared (independent search)');
+  }
+  if ((await mjFinish('hint', expect, 'game 3', stats)) === 'cleared') {
+    await mjWinChecks(expect, 'game 3');
+    stats.cleared += 1;
   }
   ok(stats.cleared >= 3, 'mahjong: three full games cleared (cleared ' + stats.cleared + ')');
   ok(stats.stuckSeen >= 1, 'mahjong: the stuck state was reached at least once');
 
-  // ---------- dead end: the last two tiles lie one on the other ----------
+  // ---------- the last two tiles lie one on the other: Mescola must rescue the game ----------
   for (let attempt = 0; attempt < 5 && !stats.deadReplayed; attempt++) {
     if (attempt > 0) await clickBtn('.mahjong .actions', RE_MJ_NEW);
     st = await mjState();
-    expect.score = 0;
+    mjReset(expect);
     const toDead = mjPlan(st.tiles, 'dead', 1500);
     if (!toDead) continue;
+    stats.games += 1;
+    stats.deadReplayed = true;
     for (const pair of toDead) await mjPlayPair(pair, expect);
     let s2 = await mjState();
     ok(s2.tiles.length === 2 && s2.stuck && s2.tiles[0].type === s2.tiles[1].type, 'mahjong: reached the last two tiles, one lying on the other');
+    eq(s2.score, 710, 'mahjong: 71 pairs give 710 points');
     await shot('mahjong-last-two-stacked');
-    await clickBtn('.mahjong .actions', RE_MJ_SHUFFLE);
+    const undone = await mjShuffle(expect, 'last two stacked', stats);
     s2 = await mjState();
-    ok(RE_MJ_DEAD.test(s2.msg), 'mahjong: Mescola explains that the last tiles cannot be freed ("' + s2.msg + '")');
-    await shot('mahjong-dead-end');
-    stats.deadReplayed = true;
-    knownBug(s2.pulse.length === 0, 'mahjong: after Mescola has failed, the Mescola button still pulses although it cannot help');
-    await clickBtn('.mahjong .actions', RE_MJ_UNDO);
+    ok(undone >= 1 && s2.tiles.length === 2 + 2 * undone, 'mahjong: Mescola puts pairs back when the last tiles lie one on the other (' + undone + ' put back, message "' + s2.msg + '")');
+    await shot('mahjong-rescued');
+    const again = await mjUndo(expect);
     const s3 = await mjState();
-    knownBug(s3.tiles.length === 4, 'mahjong: a failed Mescola throws away the undo history: with the last two tiles stacked, Annulla does nothing and 71 removed pairs end in "Inizia una nuova partita"');
+    ok(again !== null && s3.tiles.length === s2.tiles.length + 2, 'mahjong: Annulla still works after that Mescola');
+    mjCheck(s3, 'rescued + Annulla', expect.score);
+    if ((await mjFinish('greedy', expect, 'rescued game', stats)) === 'cleared') {
+      await mjWinChecks(expect, 'rescued game');
+      stats.cleared += 1;
+      stats.rescuedWin = true;
+    }
+    ok(stats.rescuedWin === true, 'mahjong: a game that ran into two stacked tiles can be finished after Mescola');
   }
-  if (!stats.deadReplayed) notes.push('mahjong: no deal with a reachable same-kind stack was found in 5 deals (dead-end check skipped)');
+  if (!stats.deadReplayed) notes.push('mahjong: no deal with a reachable same-kind stack was found in 5 deals (rescue check skipped)');
 
   // "Nuova partita" mid-game, then leave with the Menu button while the ambient sound runs
+  await mjPlayPair((await mjState()).pair, expect);
   await clickBtn('.mahjong .actions', RE_MJ_NEW);
+  mjReset(expect);
   st = await mjState();
   ok(st.tiles.length === 144 && st.score === 0 && !st.stuck, 'mahjong: "Nuova partita" deals a fresh game');
+  await mjUndo(expect);
+  eq((await mjState()).tiles.length, 144, 'mahjong: Annulla on a new game does not bring back tiles of the game before');
   await page.click('#home');
   await waitMenu();
-  console.log('  games ' + stats.games + ', cleared ' + stats.cleared + ', dead ends ' + stats.dead + ', stuck seen ' + stats.stuckSeen + ', shuffles ' + stats.shuffles + ', tile size on screen ' + stats.tile + ' px');
+  console.log('  games ' + stats.games + ', cleared ' + stats.cleared + ', stuck seen ' + stats.stuckSeen + ', shuffles ' + stats.shuffles + ', rescues by Mescola ' + stats.rescues + ', tile size on screen ' + stats.tile + ' px');
   return stats;
 }
 
@@ -1026,7 +1158,7 @@ function checkDamaDom(st, label) {
   });
   ok(good, 'dama ' + label + ': the board on screen matches debug.board (pieces, colours, Damoni, all on dark squares)');
   eq(st.counts, [countOf(st.b, 'w'), countOf(st.b, 'b')], 'dama ' + label + ': piece counters');
-  knownBug(!/(^|\D)1 pezzi/.test(st.pillText), 'dama: with one piece left the counter says "1 pezzi" instead of "1 pezzo"');
+  ok(!/(^|\D)1 pezzi/.test(st.pillText) && st.counts.every((n, k) => n !== 1 || /(^|\D)1 pezzo/.test(st.pillText.split(' | ')[k])), 'dama ' + label + ': one piece is written "1 pezzo" ("' + st.pillText + '")');
   eq(st.wins, [st.lsScore.human, st.lsScore.cpu], 'dama ' + label + ': wins counter equals the saved score');
   ok(st.levelBtns.length === 3 && st.levelBtns.filter((b) => b.on).length === 1 && st.levelBtns.find((b) => b.on).k === st.level, 'dama ' + label + ': the current level button is highlighted');
 }
@@ -1137,7 +1269,8 @@ async function damaGame(opts, cov, timing) {
     const info = checkHumanTurn(st, turnLabel);
     if (!info.moves.length) { ok(false, 'dama ' + turnLabel + ': white has no move but the game is not over'); break; }
     if (info.must && !/ha mangiato/.test(st.msg)) ok(RE_MUST.test(st.msg), 'dama ' + turnLabel + ': the message says that a capture is mandatory ("' + st.msg + '")');
-    if (info.must && /ha mangiato/.test(st.msg)) knownBug(RE_MUST.test(st.msg), 'dama: right after a capture by the CPU the message does not say that I must capture now (only the ring on the piece shows it)');
+    if (info.must && /ha mangiato/.test(st.msg)) ok(RE_MUST.test(st.msg), 'dama ' + turnLabel + ': after a capture by the CPU the message also says that I must capture now ("' + st.msg + '")');
+    if (!info.must && /ha mangiato/.test(st.msg)) ok(!RE_MUST.test(st.msg), 'dama ' + turnLabel + ': no "devi mangiare" after a CPU capture when I have nothing to take');
     if (!info.must) ok(!RE_MUST.test(st.msg), 'dama ' + turnLabel + ': no "Devi mangiare" when there is nothing to capture');
     if (info.must && cov.mustShots < 1) { cov.mustShots += 1; await shot('dama-must-capture'); }
     if (humanMoves < 2 || info.must || rnd() < 0.2) await illegalClicks(st, info, turnLabel, cov);
@@ -1161,11 +1294,25 @@ async function damaGame(opts, cov, timing) {
       if (opts.first) await shot('dama-selected');
     }
     await clickSq(mv.to);
+    // Two capture routes with the same start and end: the game asks for the first piece to take.
+    const firsts = new Set(sameFromTo.map((m) => m.caps[0]));
+    let wanted = sameFromTo;
+    if (sameFromTo.length > 1 && firsts.size > 1) {
+      const c = await damaState();
+      ok(c.b === st.b && c.turn === 'w' && !c.thinking, 'dama ' + turnLabel + ': with two capture routes nothing moves before I choose');
+      eq(sortNum(c.sqs.filter((q) => has(q.cls, 'target')).map((q) => q.sq)), sortNum(Array.from(firsts)), 'dama ' + turnLabel + ': the first pieces of both routes are marked');
+      ok(/due modi/i.test(c.msg), 'dama ' + turnLabel + ': the message asks which piece to take first ("' + c.msg + '")');
+      cov.choices += 1;
+      await clickSq(mv.caps[0]);
+      wanted = sameFromTo.filter((m) => m.caps[0] === mv.caps[0]);
+    }
     await page.evaluate(() => { window.__moveClick = window.__lastClick; });
     const after = await damaState();
-    const expected = sameFromTo.map((m) => ruleApply(st.b, m));
+    const expected = wanted.map((m) => ruleApply(st.b, m));
     ok(expected.indexOf(after.b) >= 0, 'dama ' + turnLabel + ': my move ' + moveKey(mv) + ' gives the expected position (got ' + after.b + ')');
     if (new Set(expected).size > 1) cov.ambiguous += 1;
+    const played = wanted.find((m) => ruleApply(st.b, m) === after.b) || mv;
+    eq(sortNum(after.sqs.filter((q) => has(q.cls, 'taken')).map((q) => q.sq)), sortNum(played.caps), 'dama ' + turnLabel + ': the squares of the pieces I took are marked');
     const moverWasMan = st.b[mv.from] === 'w';
     quiet = mv.caps.length || moverWasMan ? 0 : quiet + 1;
     plies += 1;
@@ -1235,6 +1382,7 @@ async function damaGame(opts, cov, timing) {
       if (cov.cpuPromo === 1) await shot('dama-cpu-damone');
     }
     ok(has(cpu.sqs[cm.from].cls, 'last') && has(cpu.sqs[cm.to].cls, 'last'), 'dama ' + turnLabel + ': the CPU move is highlighted');
+    eq(sortNum(cpu.sqs.filter((q) => has(q.cls, 'taken')).map((q) => q.sq)), sortNum(cm.caps), 'dama ' + turnLabel + ': the squares of the pieces the CPU took are marked');
     st = cpu;
     const whiteMoves = ruleMoves(cpu.b, 'w');
     if (!whiteMoves.length) { eq(cpu.over, 'cpu', 'dama ' + turnLabel + ': white cannot move, the CPU wins'); result = 'cpu'; break; }
@@ -1254,7 +1402,8 @@ async function damaGame(opts, cov, timing) {
   if (result === 'cpu') eq([sfxAfter.win - sfxBefore.win, sfxAfter.lose - sfxBefore.lose], [0, 1], 'dama ' + label + ': my defeat plays the lose sound once');
   if (result === 'draw') {
     eq(sfxAfter.win - sfxBefore.win, 0, 'dama ' + label + ': a draw does not play the win sound');
-    knownBug(sfxAfter.lose - sfxBefore.lose === 0, 'dama: a draw plays the same sound as a defeat');
+    eq(sfxAfter.lose - sfxBefore.lose, 0, 'dama ' + label + ': a draw does not play the defeat sound');
+    ok(/senza prese/i.test(st.msg) && /pedina/i.test(st.msg), 'dama ' + label + ': the draw message names both conditions ("' + st.msg + '")');
   }
   if (cov.overShots[result] !== true) { cov.overShots[result] = true; await shot('dama-over-' + result); }
   const pieces = [];
@@ -1268,9 +1417,87 @@ async function damaGame(opts, cov, timing) {
   return result;
 }
 
+// Places a position by writing into debug.board (the only place where this test writes state),
+// then redraws with a real click on the level button. list = [[row, col, 'w' | 'W' | 'b' | 'B'], ...].
+// Returns the state, or null when the page did not take the position.
+async function damaSetUp(list) {
+  await clickBtn('.dama .levels', RE_DAMA_NEW);
+  await page.evaluate((pieces) => {
+    const b = window.RA.current.debug.board;
+    for (let i = 0; i < 64; i++) b[i] = null;
+    pieces.forEach((p) => { b[p[0] * 8 + p[1]] = { c: p[2].toLowerCase(), d: p[2] !== p[2].toLowerCase() }; });
+  }, list);
+  await page.click('.dama button[data-level="facile"]');
+  const want = new Array(64).fill('.');
+  list.forEach((p) => { want[p[0] * 8 + p[1]] = p[2]; });
+  const st = await damaState();
+  return st.b === want.join('') && st.turn === 'w' && !st.over ? st : null;
+}
+
+// Two capture routes with the same start and end square.
+async function damaTwoRoutes(cov) {
+  const off = DARK === 0 ? 0 : 1; // keeps every piece on a dark square
+  const sq = (r, c) => r * 8 + c + off;
+  // --- A: a pedina can go left-left or right-right to the same square, taking different pieces
+  let st = await damaSetUp([[6, 2 + off, 'w'], [5, 1 + off, 'b'], [3, 1 + off, 'b'], [5, 3 + off, 'b'], [3, 3 + off, 'b'], [0, 6 + off, 'b']]);
+  if (!st) { notes.push('dama: the set-up position was not accepted by the page (two-routes check skipped)'); return; }
+  let info = checkHumanTurn(st, 'two routes');
+  eq(info.moves.length, 2, 'dama two routes: two legal captures');
+  const from = sq(6, 2); const to = sq(2, 2);
+  const left = info.moves.find((m) => m.caps[0] === sq(5, 1));
+  const right = info.moves.find((m) => m.caps[0] === sq(5, 3));
+  await clickSq(from);
+  eq((await damaState()).sqs.filter((q) => has(q.cls, 'target')).map((q) => q.sq), [to], 'dama two routes: one arrival square');
+  await clickSq(to);
+  let c = await damaState();
+  ok(c.b === st.b && c.turn === 'w', 'dama two routes: nothing moves before the choice');
+  eq(sortNum(c.sqs.filter((q) => has(q.cls, 'target')).map((q) => q.sq)), [sq(5, 1), sq(5, 3)], 'dama two routes: the two first pieces are marked');
+  ok(/due modi/i.test(c.msg), 'dama two routes: the message asks for the first piece ("' + c.msg + '")');
+  await shot('dama-two-routes-choice');
+  // a click elsewhere cancels the choice
+  await clickSq(sq(4, 6));
+  c = await damaState();
+  ok(c.b === st.b && c.turn === 'w' && !c.sqs.some((q) => has(q.cls, 'target') || has(q.cls, 'sel')), 'dama two routes: a click on another square cancels the choice and the selection');
+  knownBug(!/due modi/i.test(c.msg), 'dama: after the choice between two capture routes is cancelled, the line "Puoi mangiare in due modi…" stays on screen although nothing is selected');
+  // choose the right-hand route
+  await clickSq(from);
+  await clickSq(to);
+  await clickSq(sq(5, 3));
+  await page.evaluate(() => { window.__moveClick = window.__lastClick; });
+  let after = await damaState();
+  eq(after.b, ruleApply(st.b, right), 'dama two routes: the clicked route is played (right-hand pieces taken, left-hand pieces stay)');
+  eq(sortNum(after.sqs.filter((q) => has(q.cls, 'taken')).map((q) => q.sq)), sortNum(right.caps), 'dama two routes: the taken squares are marked');
+  ok(left && ruleApply(st.b, left) !== after.b, 'dama two routes: the other route would have given a different position');
+  cov.choices += 1;
+  if (after.thinking) {
+    await waitCpu();
+    const cpu = await damaState();
+    ok(ruleMoves(after.b, 'b').some((m) => ruleApply(after.b, m) === cpu.b), 'dama two routes: the CPU answers with a legal move');
+  }
+  // --- B: a Damone goes round four pieces and comes back; both directions take the same four pieces
+  st = await damaSetUp([[4, 2 + off, 'W'], [3, 3 + off, 'b'], [1, 3 + off, 'b'], [1, 1 + off, 'b'], [3, 1 + off, 'b'], [6, 6 + off, 'b']]);
+  if (!st) return;
+  info = checkHumanTurn(st, 'round trip');
+  const home = sq(4, 2);
+  ok(info.moves.length === 2 && info.moves.every((m) => m.from === home && m.to === home && m.caps.length === 4), 'dama round trip: two legal captures of four pieces that end on the start square');
+  await clickSq(home);
+  eq((await damaState()).sqs.filter((q) => has(q.cls, 'target')).map((q) => q.sq), [home], 'dama round trip: the arrival square is the start square');
+  await clickSq(home);
+  c = await damaState();
+  const done = ruleApply(st.b, info.moves[0]);
+  ok(ruleApply(st.b, info.moves[1]) === done, 'dama round trip: both directions give the same position');
+  if (c.b !== done) {
+    knownBug(false, 'dama: when a Damone can go round the same four pieces in two directions, the game still asks "Puoi mangiare in due modi…" although both ways give the same position');
+    await clickSq(info.moves[0].caps[0]);
+    c = await damaState();
+  }
+  eq(c.b, done, 'dama round trip: the four pieces are taken and the Damone is back on its square');
+  if (c.thinking) { await page.evaluate(() => { window.__moveClick = window.__lastClick; }); await waitCpu(); }
+}
+
 async function testDama() {
   console.log('DAMA');
-  const cov = { humanMulti: 0, cpuMulti: 0, humanPromo: 0, cpuPromo: 0, mustRefused: 0, mustStepRefused: 0, thinkingClicks: 0, switchWhileThinking: 0, ambiguous: 0, results: [], mustShots: 0, multiShots: 0, thinkShots: 0, overShots: {} };
+  const cov = { humanMulti: 0, cpuMulti: 0, humanPromo: 0, cpuPromo: 0, mustRefused: 0, mustStepRefused: 0, thinkingClicks: 0, switchWhileThinking: 0, ambiguous: 0, choices: 0, results: [], mustShots: 0, multiShots: 0, thinkShots: 0, overShots: {} };
   const timing = {};
   await page.evaluate(() => { if (!window.__clickSpy) { window.__clickSpy = true; document.addEventListener('click', () => { window.__lastClick = performance.now(); }, true); } });
   await openFromMenu('Dama', '.dama .checker-board .sq[data-sq]');
@@ -1299,6 +1526,9 @@ async function testDama() {
   // ----- one more game with level switches in the middle
   await damaGame({ name: 'level switches', level: 'facile', policy: 'careful', switchLevels: true }, cov, timing);
   eq((await damaState()).level, 'difficile', 'dama: the level chosen mid-game is still set at the end');
+
+  // ----- two capture routes with the same start and end (set-up positions)
+  await damaTwoRoutes(cov);
 
   // ----- "Nuova partita" while the CPU timer is running
   const newGame = () => clickBtn('.dama .levels', RE_DAMA_NEW);
@@ -1364,7 +1594,7 @@ async function testDama() {
     ok(Math.min.apply(null, t) >= 480, 'dama ' + level + ': the CPU never answers before its 500 ms timer');
   }
   console.log('  results: ' + cov.results.join(', '));
-  console.log('  coverage: ' + JSON.stringify({ humanMultiJumps: cov.humanMulti, cpuMultiJumps: cov.cpuMulti, humanPromotions: cov.humanPromo, cpuPromotions: cov.cpuPromo, mustCaptureOtherPieceRefused: cov.mustRefused, mustCaptureStepRefused: cov.mustStepRefused, clicksWhileThinking: cov.thinkingClicks, levelSwitchWhileThinking: cov.switchWhileThinking }));
+  console.log('  coverage: ' + JSON.stringify({ humanMultiJumps: cov.humanMulti, cpuMultiJumps: cov.cpuMulti, humanPromotions: cov.humanPromo, cpuPromotions: cov.cpuPromo, mustCaptureOtherPieceRefused: cov.mustRefused, mustCaptureStepRefused: cov.mustStepRefused, clicksWhileThinking: cov.thinkingClicks, levelSwitchWhileThinking: cov.switchWhileThinking, routeChoices: cov.choices }));
   console.log('  CPU answer time, click -> move shown (includes the fixed 500 ms timer): ' + JSON.stringify(summary));
   return { cov: cov, timing: summary, overflow: overflow };
 }
@@ -1420,8 +1650,8 @@ async function testDama() {
   await browser.close();
 
   console.log('\n===== boards.e2e summary (seed ' + SEED + ', ' + ((Date.now() - t0) / 1000).toFixed(0) + ' s) =====');
-  if (out.sudoku) console.log('Sudoku : ' + out.sudoku.solved + ' puzzles solved (givens ' + JSON.stringify(out.sudoku.givens) + '), page overflow at 1120x812: ' + Math.max(0, out.sudoku.overflow) + ' px');
-  if (out.mahjong) console.log('Mahjong: ' + out.mahjong.cleared + ' games cleared of ' + out.mahjong.games + ' deals, stuck states ' + out.mahjong.stuckSeen + ', shuffles ' + out.mahjong.shuffles + ', dead ends ' + (out.mahjong.dead + (out.mahjong.deadReplayed ? 1 : 0)) + ', tile size ' + out.mahjong.tile + ' px, page overflow: ' + Math.max(0, out.mahjong.overflow) + ' px');
+  if (out.sudoku) console.log('Sudoku : ' + out.sudoku.solved + ' puzzles solved (givens ' + JSON.stringify(out.sudoku.givens) + ', grades ' + JSON.stringify(out.sudoku.grades) + '), pad key ' + out.sudoku.key + ' px');
+  if (out.mahjong) console.log('Mahjong: ' + out.mahjong.cleared + ' games cleared of ' + out.mahjong.games + ' deals, stuck states ' + out.mahjong.stuckSeen + ', shuffles ' + out.mahjong.shuffles + ', rescues by Mescola ' + out.mahjong.rescues + ', tile size ' + out.mahjong.tile + ' px');
   if (out.dama) {
     console.log('Dama   : ' + out.dama.cov.results.length + ' complete games: ' + out.dama.cov.results.join(', ') + '; page overflow: ' + Math.max(0, out.dama.overflow) + ' px');
     console.log('Dama CPU answer times (ms, incl. 500 ms timer): ' + JSON.stringify(out.dama.timing));

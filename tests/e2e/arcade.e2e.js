@@ -92,12 +92,18 @@ function OBSERVE(virtualClock) {
     window.requestAnimationFrame = function (cb) { T.raf += 1; return raf(wrap(cb)); };
   }
   // Listeners on window.
-  const sets = { keydown: new Set(), keyup: new Set(), blur: new Set() };
+  const sets = { keydown: new Set(), keyup: new Set(), blur: new Set(), resize: new Set() };
   const add = window.addEventListener;
   const rem = window.removeEventListener;
   window.addEventListener = function (type, fn) { if (sets[type]) sets[type].add(fn); return add.apply(this, arguments); };
   window.removeEventListener = function (type, fn) { if (sets[type]) sets[type].delete(fn); return rem.apply(this, arguments); };
-  T.listeners = function () { return { keydown: sets.keydown.size, keyup: sets.keyup.size, blur: sets.blur.size }; };
+  // Listeners on document (the pause listens to visibilitychange there).
+  const vis = new Set();
+  const dadd = document.addEventListener;
+  const drem = document.removeEventListener;
+  document.addEventListener = function (type, fn) { if (type === 'visibilitychange') vis.add(fn); return dadd.apply(this, arguments); };
+  document.removeEventListener = function (type, fn) { if (type === 'visibilitychange') vis.delete(fn); return drem.apply(this, arguments); };
+  T.listeners = function () { return { keydown: sets.keydown.size, keyup: sets.keyup.size, blur: sets.blur.size, resize: sets.resize.size, visibility: vis.size }; };
   // Sound: count the oscillators that the game creates.
   const AC = window.AudioContext || window.webkitAudioContext;
   if (AC) {
@@ -188,6 +194,36 @@ async function layout(page) {
       devicePx: [Math.round(r.width * window.devicePixelRatio), Math.round(r.height * window.devicePixelRatio)],
     };
   });
+}
+
+// What must stand still while a game is paused (one line per game, read in the page).
+// Turns that a player chooses during the pause (Snake queue, Raccoon-man direction) are not in it.
+const frozenSig = () => {
+  const s = window.RA.current.debug.state;
+  const id = window.RA.currentId;
+  if (id === 'tetris') return JSON.stringify([s.cur, s.score, s.lines, s.gravity, s.board.reduce((n, r) => n + r.filter((v) => v !== null).length, 0)]);
+  if (id === 'snake') return JSON.stringify([s.snake[0], s.snake.length, s.dir, s.score]);
+  if (id === 'invaders') return JSON.stringify([s.px, s.pBullets, s.eBullets, s.fx, s.fy, s.score, s.lives, s.stepAcc]);
+  if (id === 'pacman') return JSON.stringify([s.pac.x, s.pac.y, s.pac.p, s.pac.moving, s.ghosts.map((g) => [g.x, g.y, g.p, g.wait]), s.score, s.freeze, s.modeClock]);
+  return JSON.stringify([s.moving, s.shots, s.angle, s.score, s.grid.size]);
+};
+const pausedNow = async (page) => hasText(await texts(page), /^PAUSA$/);
+// Is the running game paused and standing still? Looks twice, ms apart.
+async function standsStill(page, ms) {
+  await page.waitForTimeout(90);
+  const a = await page.evaluate(frozenSig);
+  const shown = await pausedNow(page);
+  await page.waitForTimeout(ms);
+  const b = await page.evaluate(frozenSig);
+  return { still: a === b, shown: shown, sig: b };
+}
+async function runsAgain(page) {
+  const a = await page.evaluate(frozenSig);
+  for (let i = 0; i < 15; i++) {
+    await page.waitForTimeout(100);
+    if ((await page.evaluate(frozenSig)) !== a) return !(await pausedNow(page));
+  }
+  return false;
 }
 
 // =====================================================================================
@@ -429,7 +465,23 @@ async function scenarioTetris(browser) {
   const mid = snapT.s;
   hud = snapT.texts;
   await page.keyboard.press('Escape');
-  check.known('B1', 'a record made in a game that is left with Esc is saved (HUD showed RECORD ' + hudAfter(hud, 'RECORD') + ')', (await hiScore(page, 'tetris')) === mid.score, 'score ' + mid.score + ', saved ' + (await hiScore(page, 'tetris')));
+  check('a record made in a game that is left with Esc is saved (HUD showed RECORD ' + hudAfter(hud, 'RECORD') + ')', mid.score > 0 && (await hiScore(page, 'tetris')) === mid.score, 'score ' + mid.score + ', saved ' + (await hiScore(page, 'tetris')));
+  await openByTile(page, 'tetris');
+  await page.waitForTimeout(120);
+  check('that record is on the HUD when the game is opened again', Number(hudAfter(await texts(page), 'RECORD')) === mid.score, hudAfter(await texts(page), 'RECORD'));
+  // ↓ still held when a piece locks: the next piece must not rush down at once.
+  await page.keyboard.press('Enter');
+  const b0 = (await state(page, tetrisSnap)).blocks;
+  await page.keyboard.down('ArrowDown');
+  await page.waitForFunction((n) => window.RA.current.debug.state.board.reduce((k, r) => k + r.filter((v) => v !== null).length, 0) > n, b0, { timeout: 6000 });
+  const n0 = await state(page, tetrisSnap);
+  await page.waitForTimeout(220);
+  const n1 = await state(page, tetrisSnap);
+  await page.waitForTimeout(600);
+  const n2 = await state(page, tetrisSnap);
+  await page.keyboard.up('ArrowDown');
+  check('↓ still held after a lock: the new piece waits about 0.3 s before it drops fast', n1.cur.y - n0.cur.y <= 1 && (n2.cur.y - n1.cur.y >= 5 || n2.blocks > n1.blocks), 'rows in the first 0.22 s: ' + (n1.cur.y - n0.cur.y) + ', in the next 0.6 s: ' + (n2.cur.y - n1.cur.y));
+  await page.keyboard.press('Escape');
   check.note(botRows + ' rows cleared by the bot with ' + pieces + ' pieces (best clear: ' + maxClear + ' rows at once), level 3 reached, final score ' + finalScore);
   check('no page errors', page.errors.length === 0, page.errors.join(' | '));
   await page.context().close();
@@ -533,7 +585,7 @@ async function scenarioSnake(browser) {
   await page.waitForTimeout(1000);
   s2 = await state(page, snakeSnap);
   const steps = s2.head.x - s.head.x;
-  check('first speed is about 7 steps per second (0.14 s per step)', steps >= 6 && steps <= 8, steps + ' steps in ' + (Date.now() - t0) + ' ms');
+  check('first speed is about 6.7 steps per second (0.15 s per step)', steps >= 6 && steps <= 8, steps + ' steps in ' + (Date.now() - t0) + ' ms');
   // Reverse turn is ignored; quick double turn is kept in order.
   await page.keyboard.press('ArrowLeft');
   s = await state(page, snakeSnap);
@@ -590,8 +642,12 @@ async function scenarioSnake(browser) {
   check('score follows the rule 10 x (1 + fish / 5)', scoreOk);
   check('the fish is never placed on the snake', foodOk);
   check('HUD shows the score of the state', hudOk);
-  // Step speed late in the game: 0.14 - 0.004 x fish, never under 0.05.
+  // Step speed late in the game: 0.15 - 0.003 x fish, never under 0.09 s.
   const times = await page.evaluate(() => window.__snakeBot.stepTimes.slice(-12));
+  const gaps = times.slice(1).map((t, i) => t - times[i]).sort((a, b) => a - b);
+  const median = gaps[Math.floor(gaps.length / 2)];
+  const wantGap = Math.max(0.09, 0.15 - 0.003 * best.eaten) * 1000;
+  if (s.eaten === best.eaten && gaps.length >= 8) check('late speed follows max(0.09, 0.15 - 0.003 x fish)', near(median, wantGap, 22), 'median gap ' + Math.round(median) + ' ms, expected ' + Math.round(wantGap) + ' ms at ' + best.eaten + ' fish');
   card = await overlayText(page);
   const hi = await hiScore(page, 'snake');
   check('game-over card shows the result', cardHas(card, 'Punti', s.score) && cardHas(card, '(Pesci|Bocconi)', s.eaten) && cardHas(card, 'Record', hi), card);
@@ -706,6 +762,15 @@ async function scenarioInvaders(browser) {
   for (let i = 0; i < 12; i++) { await page.waitForTimeout(80); maxBullets = Math.max(maxBullets, (await state(page, invSnap)).pBullets.length); }
   await page.keyboard.up(' ');
   check('held Space keeps firing, never more than 2 bullets', maxBullets === 2, 'max ' + maxBullets);
+  // A tap shorter than one frame (key down and up at once) must still fire.
+  let tapsFired = 0;
+  for (let i = 0; i < 6; i++) {
+    await page.waitForFunction(() => window.RA.current.debug.state.pBullets.length === 0 && window.RA.current.debug.state.cooldown <= 0, null, { timeout: 5000 });
+    await page.keyboard.press(' ');
+    await page.waitForTimeout(60);
+    if ((await state(page, invSnap)).pBullets.length === 1) tapsFired += 1;
+  }
+  check('a Space tap shorter than a frame fires one bullet', tapsFired === 6, tapsFired + ' of 6');
   // Shields: a shot from under a shield breaks one cell of it. The first shield is at x 50-98.
   await page.waitForFunction(() => window.RA.current.debug.state.pBullets.length === 0, null, { timeout: 4000 });
   await page.keyboard.down('ArrowRight');
@@ -807,13 +872,15 @@ function pacBotInstall() {
     const nearG = (x, y) => maps.reduce((m, d) => Math.min(m, d[y][x]), Infinity);
     const hunted = s.scared <= 1;
     if (hunted && pac.moving && nearG(from.x, from.y) <= 1) return { up: 'down', down: 'up', left: 'right', right: 'left' }[pac.dir];
+    // While the chasers are afraid (and there is time left), go and catch the nearest one.
+    const prey = s.scared > 2.5 && !B.target ? s.ghosts.filter((g) => !g.eaten && g.wait <= 0).map((g) => (g.moving ? P.nextTile(g.x, g.y, g.dir) : { x: g.x, y: g.y })) : [];
     const queue = [[from.x, from.y, null]];
     const seen = new Set([from.x + ',' + from.y]);
     for (let i = 0; i < queue.length; i++) {
       const x = queue[i][0];
       const y = queue[i][1];
       const first = queue[i][2];
-      const goal = B.target ? (x === B.target.x && y === B.target.y) : (s.grid[y][x] === '.' || s.grid[y][x] === 'o');
+      const goal = B.target ? (x === B.target.x && y === B.target.y) : prey.length ? prey.some((t) => t.x === x && t.y === y) : (s.grid[y][x] === '.' || s.grid[y][x] === 'o');
       if (i > 0 && goal) return first;
       for (const d of names) {
         if (!P.canMove(s.grid, x, y, d)) continue;
@@ -914,7 +981,7 @@ async function scenarioPacman(browser) {
     if (s.acornsLeft !== s.counted) acornOk = false;
     if (s.started) {
       // The frame may be one step older than the state: accept the score before the last acorn too.
-      const okText = hasText(snap.texts, new RegExp('livello\\s*' + s.level, 'i')) && (hudShows(snap.texts, [s.score]) || hudShows(snap.texts, [s.score - 10]) || hudShows(snap.texts, [s.score - 50]));
+      const okText = hasText(snap.texts, new RegExp('liv(ello)?\\.?\\s*' + s.level + '$', 'i')) && (hudShows(snap.texts, [s.score]) || hudShows(snap.texts, [s.score - 10]) || hudShows(snap.texts, [s.score - 50]));
       if (!okText || hudBad(snap.texts).length) hudOk = false;
       if (hasText(snap.texts, /pronti/i) && s.lives < 3) sawPronti = true;
     }
@@ -950,8 +1017,10 @@ async function scenarioPacman(browser) {
   }
 
   // Catch a scared chaser (the bot does it while it plays; play on until it happened once).
-  if (bot.ghostsEaten === 0) {
-    try { await page.waitForFunction(() => window.__pacBot.ghostsEaten > 0 || window.RA.current.debug.state.over, null, { timeout: 90000 }); } catch (e) { /* below */ }
+  for (const tEnd = Date.now() + 120000; Date.now() < tEnd;) {
+    if (await page.evaluate(() => window.__pacBot.ghostsEaten > 0)) break;
+    if (!(await started(page))) { await page.keyboard.press('Enter'); await page.evaluate(() => { window.__pacBot.lastLives = null; }); }
+    await page.waitForTimeout(250);
   }
   const eaten = await page.evaluate(() => window.__pacBot.ghostsEaten);
   check('the raccoon catches a scared chaser at least once', eaten > 0, 'caught ' + eaten);
@@ -982,7 +1051,7 @@ async function scenarioPacman(browser) {
     for (let i = 0; i < 10; i++) { await page.keyboard.down('ArrowLeft'); await page.waitForTimeout(30); }
     s2 = await state(page, pacSnap);
     const canLeft = await page.evaluate(() => { const st = window.RA.current.debug.state; return window.RA.modules.pacman.canMove(st.grid, st.start.x, st.start.y, 'left'); });
-    check.known('B2', 'a direction key that is held during the catch still moves the raccoon after "Pronti!"', !canLeft || s2.pac.x !== s2.start.x || s2.pac.moving || s2.lives < s.lives, 'want=' + s2.pac.want + ' moving=' + s2.pac.moving);
+    check('a direction key that is held during the catch still moves the raccoon after "Pronti!"', !canLeft || s2.pac.x !== s2.start.x || s2.pac.moving || s2.lives < s.lives, 'want=' + s2.pac.want + ' moving=' + s2.pac.moving);
   }
   await page.keyboard.up('ArrowLeft');
   // Lose every life: game over card, restart from level 1.
@@ -998,7 +1067,7 @@ async function scenarioPacman(browser) {
   s = await state(page, pacSnap);
   check('"Gioca ancora" starts again from level 1 with 3 lives and 0 points', s.started && s.level === 1 && s.lives === 3 && s.score === 0 && s.ghosts.length === 3);
   await page.waitForTimeout(150);
-  check.known('U1', 'the record is shown on the HUD during play', hi > 3 && hudShows(await texts(page), [hi]), 'record ' + hi + ', HUD: ' + (await texts(page)).join(' | '));
+  check('the record is shown on the HUD during play', hi > 3 && hasText(await texts(page), new RegExp('record\\D*0*' + hi + '$', 'i')), 'record ' + hi + ', HUD: ' + (await texts(page)).join(' | '));
   await page.evaluate(() => clearInterval(window.__pacBot.timer));
   check('no page errors', page.errors.length === 0, page.errors.join(' | '));
   await page.context().close();
@@ -1094,7 +1163,7 @@ async function scenarioBubbles(browser) {
   await cardButton(page).click();
   check('the button starts the game', await started(page));
   s = await state(page, bubSnap);
-  check('level 1 starts with 5 rows, 4 kinds and 6 rows to come', s.size === 48 && s.kinds === 4 && s.rowsLeft === 6 && s.level === 1, JSON.stringify(s));
+  check('level 1 starts with 5 rows, 4 kinds and 5 rows to come', s.size === 48 && s.kinds === 4 && s.rowsLeft === 5 && s.level === 1, JSON.stringify(s));
 
   // Mouse aim: the angle follows the pointer exactly.
   let aimOk = true;
@@ -1108,7 +1177,7 @@ async function scenarioBubbles(browser) {
   let p = await canvasPoint(page, 5, 600);
   await page.mouse.move(p.x, p.y);
   check('the aim stops at the limit angle', near((await state(page, bubSnap)).angle, -1.35, 1e-9));
-  // Keyboard aim: 1.3 radians per second.
+  // Keyboard aim: slow (0.45 rad/s) for the first 0.25 s of a press, then 1.3 rad/s.
   p = await canvasPoint(page, 180, 300);
   await page.mouse.move(p.x, p.y);
   const a0 = (await state(page, bubSnap)).angle;
@@ -1118,8 +1187,56 @@ async function scenarioBubbles(browser) {
   const a1 = (await state(page, bubSnap)).angle;
   const dt = (Date.now() - t0) / 1000;
   await page.keyboard.up('ArrowRight');
-  check('→ turns the aim at about 1.3 rad per second', near(a1 - a0, 1.3 * dt, 0.12), (a1 - a0).toFixed(3) + ' rad in ' + dt.toFixed(3) + ' s');
+  const wantTurn = 0.45 * Math.min(dt, 0.25) + 1.3 * Math.max(0, dt - 0.25);
+  check('held → turns the aim slowly at first (0.45 rad/s), then at 1.3 rad/s', near(a1 - a0, wantTurn, 0.07), (a1 - a0).toFixed(3) + ' rad in ' + dt.toFixed(3) + ' s, expected ' + wantTurn.toFixed(3));
+  const a2 = (await state(page, bubSnap)).angle;
+  await page.keyboard.press('ArrowLeft'); // key down and up at once
+  await page.waitForTimeout(60);
+  const a3 = (await state(page, bubSnap)).angle;
+  check('a very short tap on ← turns the aim by one small step', a2 - a3 > 0.004 && a2 - a3 < 0.03, (a2 - a3).toFixed(4) + ' rad');
   await shot(page, 'bubbles-aim');
+
+  // The mouse works on the whole game area, with the main button only.
+  const rectC = await page.evaluate(() => { const r = document.querySelector('.arcade-stage canvas').getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; });
+  await page.mouse.move(Math.round(rectC[0] + rectC[2] / 2), Math.round(rectC[1] + rectC[3] * 0.5));
+  await page.mouse.down({ button: 'right' });
+  await page.mouse.up({ button: 'right' });
+  await page.mouse.down({ button: 'middle' });
+  await page.mouse.up({ button: 'middle' });
+  check('the right and middle mouse buttons do not fire', !(await state(page, bubSnap)).moving && (await state(page, bubSnap)).shots === 0);
+  const m0 = await page.evaluate(() => window.RA.audio.isMuted());
+  await page.locator('#mute').click();
+  await page.locator('#mute').click();
+  check('a click on a top-bar button does not fire', !(await state(page, bubSnap)).moving && (await state(page, bubSnap)).shots === 0 && (await page.evaluate(() => window.RA.audio.isMuted())) === m0);
+  const outX = Math.round(rectC[0] - 40);
+  const outY = Math.round(rectC[1] + rectC[3] * 0.6);
+  await page.mouse.move(outX, outY);
+  const wantOut = await page.evaluate((q) => {
+    const r = document.querySelector('.arcade-stage canvas').getBoundingClientRect();
+    return Math.max(-1.35, Math.min(1.35, Math.atan2(((q[0] - r.left) / r.width) * 360 - 180, Math.max(10, 548 - ((q[1] - r.top) / r.height) * 610))));
+  }, [outX, outY]);
+  check('the mouse aims also from outside the canvas', near((await state(page, bubSnap)).angle, wantOut, 1e-6), 'want ' + wantOut + ' got ' + (await state(page, bubSnap)).angle);
+  await page.mouse.down();
+  await page.mouse.up();
+  check('a click outside the canvas (in the game area) fires', (await state(page, bubSnap)).moving || (await state(page, bubSnap)).shots === 1);
+  await waitLanded(page);
+  // Paused: the mouse and the Space bar must do nothing.
+  await page.keyboard.press('p');
+  let st = await standsStill(page, 300);
+  check('P pauses Bolle and shows "PAUSA"', st.still && st.shown);
+  await aimMouse(page, 0.8);
+  await page.mouse.down();
+  await page.mouse.up();
+  const afterMouse = await page.evaluate(frozenSig);
+  check('the mouse does not aim or fire while paused', afterMouse === st.sig, st.sig + ' / ' + afterMouse);
+  await page.keyboard.press(' ', { delay: 40 });
+  await page.keyboard.press('ArrowLeft', { delay: 60 });
+  const afterKeys = await page.evaluate(frozenSig);
+  check.known('P1', 'Space and the arrows do nothing while Bolle is paused', afterKeys === afterMouse, afterMouse + ' / ' + afterKeys);
+  await page.keyboard.press('p');
+  await page.waitForTimeout(120);
+  check('P resumes Bolle', !(await pausedNow(page)));
+  await waitLanded(page);
 
   // Play: odd shots with the mouse (move + click), even shots with the keyboard (← → + Space).
   let shots = 0;
@@ -1134,6 +1251,8 @@ async function scenarioBubbles(browser) {
   let countdownShown = true;
   let kindOk = true;
   let level2 = null;
+  let scoreBeforeLast = 0;
+  let lastGain = 0;
   let lostOnce = false;
   let games = 1;
   let shotDone = false;
@@ -1184,20 +1303,23 @@ async function scenarioBubbles(browser) {
     const after = snap.s;
     const rowCame = after.base < before.base;
     if (rowCame) rowsAdded += 1;
-    const gained = after.score - before.score;
+    // The 100 points for a finished level are added to the score with the last shot.
+    const gained = after.score - before.score - (after.won ? 100 : 0);
     if (gained > 0) pops += 1;
     // Bubbles that fell: score = 10 per popped + 20 per fallen.
     const removed = before.size + 1 + (rowCame ? (after.base % 2 === 0 ? 10 : 9) : 0) - after.size;
     if (gained > 0 && gained > removed * 10) falls += 1;
     if (gained > 0 && (gained < removed * 10 || gained > removed * 20 || removed < 3)) check('score is 10 per popped bubble and 20 per fallen bubble', false, 'gained ' + gained + ' removed ' + removed);
+    scoreBeforeLast = before.score;
+    lastGain = gained;
     if (near(firedAngle, plan.angle, 0.003)) { predicted += 1; if (gained === plan.score - before.score) predictedOk += 1; }
     if (!after.over) {
       if (!after.present.includes(after.cur)) kindOk = false;
       const t = snap.texts;
-      if (!hudShows(t, [after.score, after.level, after.rowsLeft]) || hudBad(t).length) hudOk = false;
-      // Shots left before the next row: checked only if the HUD has that line.
-      if (after.rowsLeft && hasText(t, /tiri/i) && !t.some((x) => /tiri/i.test(x) && hudNums([x]).includes(6 - (after.shots % 6)))) hudOk = false;
-      if (after.rowsLeft && !hasText(t, /tiri/i)) countdownShown = false;
+      if (!hudShows(t, [after.score, after.level]) || hudBad(t).length) hudOk = false;
+      // Shots left before the next row (a row comes every 7 shots), or a line that says no more rows come.
+      if (after.rowsLeft && !t.some((x) => /tir[io]/i.test(x) && hudNums([x]).includes(7 - (after.shots % 7)))) countdownShown = false;
+      if (!after.rowsLeft && !hasText(t, /niente/i)) countdownShown = false;
     }
     if (!shotDone && shots === 14) { shotDone = true; await shot(page, 'bubbles-play'); }
   }
@@ -1206,22 +1328,22 @@ async function scenarioBubbles(browser) {
   check('the mouse aim stayed exact during play', aimOk);
   check('groups of 3 pop', pops >= 5, 'pops ' + pops);
   check('hanging bubbles fall (extra points)', falls >= 1, 'falls ' + falls);
-  check('a new row comes every 6 shots', rowsAdded >= 1 && rowsAdded <= 6, 'rows ' + rowsAdded);
+  check('a new row comes every 7 shots (5 rows on level 1)', rowsAdded >= 1 && rowsAdded <= 5 * games, 'rows ' + rowsAdded);
   check('the waiting bubble is always a kind that is on the board', kindOk);
-  check('HUD shows score, level and rows to come', hudOk);
-  check.known('U2', 'HUD tells how many shots are left before the next row comes down', countdownShown);
+  check('HUD shows the score and level of the state', hudOk);
+  check('HUD tells how many shots are left before the next row comes down', countdownShown);
   check('shots land where the aim line says (same result as a copy of the game)', predicted > 0 && predictedOk >= predicted * 0.9, predictedOk + ' of ' + predicted);
   check('level 1 ends: cleared, or lost after the rows reached the line', s.over, JSON.stringify(s));
   check.note('level 1 ' + (s.won ? 'cleared' : 'not cleared') + ': ' + shots + ' shots (' + mouseShots + ' mouse, ' + keyShots + ' keyboard), ' + pops + ' pops, ' + falls + ' with falling bubbles, ' + rowsAdded + ' new rows, score ' + s.score + ', games ' + games);
   if (s.over && s.won) {
     const card = await overlayText(page);
-    check('win card offers level 2 and shows the bonus', cardHas(card, 'Punti', s.score + 100) && /livello 2/i.test(await cardButton(page).innerText()), card);
+    check('win card offers level 2 and shows the score with the 100 point prize', cardHas(card, 'Punti', s.score) && /100/.test(card) && s.score === scoreBeforeLast + lastGain + 100 && /livello 2/i.test(await cardButton(page).innerText()), card + ' score ' + s.score + ' before ' + scoreBeforeLast + ' gain ' + lastGain);
     const hi = await hiScore(page, 'bubbles');
-    check.known('B3', 'the saved record includes the +100 bonus shown on the win card', hi === s.score + 100, 'card says ' + (s.score + 100) + ', saved ' + hi);
+    check('the saved record includes the 100 point prize shown on the win card', hi === s.score, 'card says ' + s.score + ', saved ' + hi);
     await shot(page, 'bubbles-won');
     await page.keyboard.press('Enter');
     level2 = await state(page, bubSnap);
-    check('level 2 starts with the score + 100, 6 rows, 5 kinds, 8 rows to come', level2.started && level2.level === 2 && level2.score === s.score + 100 && level2.size === 57 && level2.kinds === 5 && level2.rowsLeft === 8, JSON.stringify(level2));
+    check('level 2 starts with the score of the card, 5 rows, 4 kinds, 6 rows to come', level2.started && level2.level === 2 && level2.score === s.score && level2.size === 48 && level2.kinds === 4 && level2.rowsLeft === 6, JSON.stringify(level2));
     await page.waitForTimeout(100);
     await shot(page, 'bubbles-level2');
   }
@@ -1380,13 +1502,17 @@ async function scenarioShell(browser) {
   await page.waitForTimeout(300);
   const i3 = await state(page, invSnap);
   check('the raccoon was moving before the window lost focus', i1.px > 240);
-  check('a key held when the window loses focus is released', i3.px === i2.px, i2.px + ' -> ' + i3.px);
+  check('when the window loses focus the game pauses and the held key is released', i3.px === i2.px && (await pausedNow(page)), i2.px + ' -> ' + i3.px);
   await page.keyboard.up('ArrowRight');
+  await page.keyboard.press('p');
+  await page.waitForTimeout(250);
+  const i3b = await state(page, invSnap);
+  check('after P the key that was held before does not act any more', i3b.px === i3.px && !(await pausedNow(page)), i3.px + ' -> ' + i3b.px);
   await page.keyboard.down('ArrowLeft');
   await page.waitForTimeout(150);
   const i4 = await state(page, invSnap);
   await page.keyboard.up('ArrowLeft');
-  check('keys work again after the focus comes back', i4.px < i3.px);
+  check('keys work again after the focus comes back and P is pressed', i4.px < i3.px);
 
   // Modifier keys: Cmd/Ctrl + key is not a game key.
   i1 = await state(page, invSnap);
@@ -1396,6 +1522,17 @@ async function scenarioShell(browser) {
   await page.keyboard.up('ArrowLeft');
   await page.keyboard.up('Control');
   check('Ctrl + arrow does not move the raccoon', (await state(page, invSnap)).px === i1.px);
+  // A key is held, then a key press with Cmd arrives (macOS sends no key-up after that):
+  // every held key must be dropped, so nothing stays stuck.
+  await page.keyboard.down('ArrowRight');
+  await page.waitForTimeout(120);
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Meta', metaKey: true, bubbles: true })));
+  await page.waitForTimeout(60);
+  const c1 = await state(page, invSnap);
+  await page.waitForTimeout(300);
+  const c2 = await state(page, invSnap);
+  await page.keyboard.up('ArrowRight');
+  check('a key press with Cmd releases the held keys (no stuck key)', c2.px === c1.px && c1.px > i1.px, c1.px + ' -> ' + c2.px);
 
   // Space, Enter and the arrows must not scroll the page or press a focused button again.
   await page.setViewportSize({ width: 700, height: 600 });
@@ -1470,6 +1607,87 @@ async function scenarioShell(browser) {
   await page.keyboard.press('Escape');
   check('Esc on the menu keeps the menu', (await page.locator('button.tile').count()) === 11);
 
+  // Pause in every game (P, lost focus, hidden window) and the record after leaving with Esc.
+  for (const id of ARCADE) {
+    await page.evaluate((k) => localStorage.removeItem('ra.hi.' + k), id);
+    await openByTile(page, id);
+    await page.keyboard.press('p'); // on the start card P must do nothing
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(100);
+    check(id + ': P on the start card does not pause the game that starts next', (await started(page)) && !(await pausedNow(page)));
+    await page.keyboard.press('p');
+    let st = await standsStill(page, 500);
+    check(id + ': P pauses the game and the canvas shows "PAUSA"', st.still && st.shown && hasText(await texts(page), /premi p/i), 'still ' + st.still + ', text ' + st.shown);
+    if (id === 'tetris') { await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowUp'); await page.keyboard.press(' ', { delay: 30 }); }
+    if (id === 'snake') await page.keyboard.press('ArrowUp');
+    if (id === 'invaders') { await page.keyboard.press('ArrowLeft', { delay: 100 }); await page.keyboard.press(' ', { delay: 40 }); }
+    if (id === 'pacman') { await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowRight'); }
+    if (id === 'bubbles') { await page.keyboard.press('ArrowLeft', { delay: 80 }); await page.keyboard.press(' ', { delay: 40 }); }
+    await page.waitForTimeout(80);
+    const sigKeys = await page.evaluate(frozenSig);
+    (id === 'bubbles' ? (n, ok, d) => check.known('P1', n, ok, d) : check)(id + ': game keys do nothing while paused', sigKeys === st.sig, st.sig + ' / ' + sigKeys);
+    await page.keyboard.press('P'); // capital letter
+    check(id + ': P again resumes the game', await runsAgain(page));
+    await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+    st = await standsStill(page, 400);
+    check(id + ': the game pauses by itself when the window loses focus', st.still && st.shown);
+    await page.keyboard.press('p');
+    check(id + ': P resumes after a lost focus', await runsAgain(page));
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { get: function () { return true; }, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      delete document.hidden;
+    });
+    st = await standsStill(page, 400);
+    check(id + ': the game pauses by itself when the window is hidden', st.still && st.shown);
+    await page.keyboard.press('p');
+    check(id + ': P resumes after the window was hidden', await runsAgain(page));
+    // Make some points, leave with Esc: the record must be saved and shown next time.
+    const scoreNow = () => page.evaluate(() => window.RA.current.debug.state.score);
+    if (id === 'tetris') {
+      await page.keyboard.press(' ');
+    } else if (id === 'invaders') {
+      await page.keyboard.down(' ');
+      await page.waitForFunction(() => window.RA.current.debug.state.score > 0, null, { timeout: 20000 }).catch(() => {});
+      await page.keyboard.up(' ');
+    } else if (id === 'pacman') {
+      const dir = await page.evaluate(() => { const st2 = window.RA.current.debug.state; return ['left', 'right', 'up'].find((d) => window.RA.modules.pacman.canMove(st2.grid, st2.pac.x, st2.pac.y, d)); });
+      await page.keyboard.press({ left: 'ArrowLeft', right: 'ArrowRight', up: 'ArrowUp' }[dir]);
+      await page.waitForFunction(() => window.RA.current.debug.state.score > 0, null, { timeout: 10000 }).catch(() => {});
+    } else if (id === 'snake') {
+      for (let i = 0; i < 500; i++) {
+        const q = await page.evaluate(() => { const z = window.RA.current.debug.state; return { h: z.snake[0], f: z.food, d: z.dir, e: z.eaten, alive: z.alive, q: z.queue.length }; });
+        if (q.e >= 1) break;
+        if (!q.alive) { await page.keyboard.press('Enter'); continue; }
+        let want = null;
+        if (q.f.x > q.h.x && q.d !== 'left') want = 'ArrowRight';
+        else if (q.f.x < q.h.x && q.d !== 'right') want = 'ArrowLeft';
+        else if (q.f.y > q.h.y && q.d !== 'up') want = 'ArrowDown';
+        else if (q.f.y < q.h.y && q.d !== 'down') want = 'ArrowUp';
+        else if (q.f.x !== q.h.x) want = q.h.y > 2 ? 'ArrowUp' : 'ArrowDown';
+        else want = q.h.x > 2 ? 'ArrowLeft' : 'ArrowRight';
+        if (want && !q.q) await page.keyboard.press(want);
+        await page.waitForTimeout(40);
+      }
+    } else {
+      for (let i = 0; i < 15 && (await scoreNow()) === 0; i++) {
+        const plan = await state(page, bubblesPlan);
+        if (plan) { await aimMouse(page, plan.angle); await page.mouse.down(); await page.mouse.up(); }
+        await waitLanded(page);
+      }
+    }
+    await page.waitForTimeout(80);
+    const made = await page.evaluate(withTexts(() => window.RA.current.debug.state.score));
+    await page.keyboard.press('Escape');
+    const saved = await hiScore(page, id);
+    check(id + ': a record made in a game that is left with Esc is saved', made.s > 0 && saved === made.s && hudShows(made.texts, [made.s]), 'score ' + made.s + ', saved ' + saved);
+    await openByTile(page, id);
+    await page.waitForTimeout(120);
+    const hudBack = await texts(page);
+    check(id + ': that record is on the HUD when the game is opened again', hasText(hudBack, /record/i) && hudShows(hudBack, [made.s]), hudBack.join(' | '));
+    await page.keyboard.press('Escape');
+  }
+
   // Sizes: every game, 4 window sizes, canvas visible, no scrolling, start card inside the canvas.
   const SIZES = [[700, 600], [1120, 812], [1440, 900], [1728, 1117]];
   let sizeOk = true;
@@ -1520,11 +1738,23 @@ async function scenarioShell(browser) {
   let sharp = true;
   const soft = [];
   for (const id of ARCADE) {
-    await retina.evaluate((k) => window.RA.openGame(k), id);
-    const l = await layout(retina);
-    if (l.backing[1] < l.devicePx[1] - 2) { sharp = false; soft.push(id + ' ' + l.backing.join('x') + ' drawn on ' + l.devicePx.join('x')); }
+    for (const size of [[1440, 900], [1728, 1117], [1120, 812]]) {
+      // The first size is the one the game is opened at; the others are window resizes.
+      await retina.setViewportSize({ width: size[0], height: size[1] });
+      if (size[0] === 1440) await retina.evaluate((k) => window.RA.openGame(k), id);
+      await retina.waitForTimeout(120);
+      const l = await layout(retina);
+      if (l.backing[0] < l.devicePx[0] - 2 || l.backing[1] < l.devicePx[1] - 2) { sharp = false; soft.push(id + ' at ' + size.join('x') + ': ' + l.backing.join('x') + ' drawn on ' + l.devicePx.join('x')); }
+      // The picture must still be drawn in the whole canvas after the backing store changed.
+      const drawn = await retina.evaluate((w) => {
+        const c = document.querySelector('.arcade-stage canvas');
+        const t = c.getContext('2d').getTransform();
+        return { scale: t.a, ok: t.a === t.d && t.a * w === c.width };
+      }, { bubbles: 360, tetris: 470, invaders: 480, pacman: 630, snake: 740 }[id]);
+      if (!drawn.ok || drawn.scale < 2) { sharp = false; soft.push(id + ' transform ' + JSON.stringify(drawn)); }
+    }
   }
-  check.known('B4', 'on a Retina screen (1440x900 @2x) the canvas has at least as many pixels as it covers', sharp, soft.join('; '));
+  check('on a Retina screen (@2x) the canvas has at least as many pixels as it covers, also after a resize', sharp, soft.join('; '));
   await retina.context().close();
 }
 
@@ -1597,7 +1827,7 @@ async function scenarioFramerate(browser) {
     }, { hz: hz, jitter: !!jitter });
   };
   const ref = await measure(60, false);
-  check('60 Hz reference: 120 px in 0.5 s, 5 Tetris rows in 4.1 s, 14 Snake steps in 2.03 s', near(ref.invPx, 120, 5) && ref.tetRows === 5 && ref.snakeSteps === 14, JSON.stringify(ref));
+  check('60 Hz reference: 120 px in 0.5 s, 5 Tetris rows in 4.1 s, 13 Snake steps in 2.03 s', near(ref.invPx, 120, 5) && ref.tetRows === 5 && ref.snakeSteps === 13, JSON.stringify(ref));
   const rows = ['60Hz ' + JSON.stringify(ref)];
   for (const cfg of [[30, false], [50, false], [75, false], [120, false], [144, false], [240, false], [120, true], [60, true]]) {
     const m = await measure(cfg[0], cfg[1]);
@@ -1670,6 +1900,7 @@ async function scenarioRare(browser) {
   r = await state(page, invSnap);
   card = await overlayText(page);
   check('Defender: the game ends when the invaders reach the raccoon row, with lives left', r.over && r.lives > 0 && cardHas(card, 'Punti', r.score), JSON.stringify({ lives: r.lives, fy: r.fy }));
+  check('Defender: invaders that pass over the shelters break them', r.shieldCells < 40, 'shelter cells left: ' + r.shieldCells);
   await page.waitForTimeout(100);
   await shot(page, 'rare-invaders-landed');
 
@@ -1686,7 +1917,7 @@ async function scenarioRare(browser) {
   await page.keyboard.up(' ');
   r = await state(page, invSnap);
   check('Defender: shooting the last invader starts wave 2', r.wave === 2, JSON.stringify({ wave: r.wave, over: r.over }));
-  check.note('Defender: shield cells at the start of wave 2 after 40 were broken in wave 1: ' + r.shieldCells + ' of 80 (shields are not rebuilt)');
+  check('Defender: the shelters are rebuilt for the new wave', r.shieldCells === 80, 'shelter cells at the start of wave 2: ' + r.shieldCells + ' of 80');
 
   // Raccoon-man: level 3 has 4 chasers; the HUD has room for the text.
   await page.evaluate(() => window.RA.openGame('pacman'));
@@ -1727,9 +1958,30 @@ async function scenarioRare(browser) {
   });
   await page.waitForTimeout(500);
   r = await state(page, pacSnap);
-  check.known('B5', 'Raccoon-man: a chaser and the raccoon that cross in the tunnel meet', r.lives < cross.lives || r.over, 'lives ' + cross.lives + ' -> ' + r.lives + ', raccoon x=' + r.pac.x + ', chaser x=' + r.ghosts[0].x);
+  check('Raccoon-man: a chaser and the raccoon that cross in the tunnel meet', r.lives < cross.lives || r.over, 'lives ' + cross.lives + ' -> ' + r.lives + ', raccoon x=' + r.pac.x + ', chaser x=' + r.ghosts[0].x);
 
-  // Bolle: last rows. No more rows come; the counter text shows a dash.
+  // Raccoon-man: catching a scared chaser.
+  if (!(await started(page))) await page.keyboard.press('Enter');
+  const before = await page.evaluate(() => {
+    // STATE WRITE: chasers afraid, one of them stands on the tile next to the raccoon.
+    const s = window.RA.current.debug.state;
+    const P = window.RA.modules.pacman;
+    s.freeze = 0;
+    s.scared = 7;
+    s.eatChain = 0;
+    s.pac.x = s.start.x; s.pac.y = s.start.y; s.pac.p = 0; s.pac.moving = false; s.pac.want = null;
+    const dir = ['left', 'right', 'up'].find((d) => P.canMove(s.grid, s.pac.x, s.pac.y, d));
+    const n = P.nextTile(s.pac.x, s.pac.y, dir);
+    s.ghosts.forEach((g) => { g.wait = 999; g.eaten = false; g.moving = false; g.p = 0; g.x = s.house.x; g.y = s.house.y; });
+    s.ghosts[0].x = n.x; s.ghosts[0].y = n.y;
+    window.__tap({ left: 'ArrowLeft', right: 'ArrowRight', up: 'ArrowUp' }[dir]);
+    return { score: s.score, lives: s.lives };
+  });
+  await page.waitForTimeout(400);
+  r = await page.evaluate(() => { const s = window.RA.current.debug.state; return { eaten: s.ghosts[0].eaten, score: s.score, lives: s.lives, over: s.over }; });
+  check('Raccoon-man: touching a scared chaser catches it (200 points, no life lost)', r.eaten && r.score - before.score >= 200 && r.score - before.score <= 220 && r.lives === before.lives, JSON.stringify(before) + ' -> ' + JSON.stringify(r));
+
+  // Bolle: last rows. No more rows come.
   await page.evaluate(() => window.RA.openGame('bubbles'));
   await page.keyboard.press('Enter');
   await page.evaluate(() => {
@@ -1742,7 +1994,7 @@ async function scenarioRare(browser) {
   });
   await page.waitForTimeout(100);
   const hud = await texts(page);
-  check('Bolle: with no rows left the HUD shows 0 rows and no broken text', hasText(hud, /fil[ae]\D*0$/i) && hudBad(hud).length === 0, hud.filter((t) => t.length > 3).join(','));
+  check('Bolle: with no rows left the HUD says that no more rows come, no broken text', hasText(hud, /niente/i) && !hasText(hud, /tir[io]/i) && hudBad(hud).length === 0, hud.filter((t) => t.length > 3).join(','));
   await shot(page, 'rare-bubbles-last');
   const p = await canvasPoint(page, 180, 100);
   await page.mouse.move(p.x, p.y);
@@ -1751,7 +2003,7 @@ async function scenarioRare(browser) {
   await page.waitForFunction(() => !window.RA.current.debug.started, null, { timeout: 5000 });
   r = await state(page, bubSnap);
   card = await overlayText(page);
-  check('Bolle: popping the last bubbles wins the level', r.won && r.size === 0 && cardHas(card, 'Punti', r.score + 100), JSON.stringify(r) + card);
+  check('Bolle: popping the last bubbles wins the level (30 points + 100 prize)', r.won && r.size === 0 && r.score === 130 && cardHas(card, 'Punti', 130), JSON.stringify(r) + card);
 
   // Tetris at a high level: gravity 0.05 s per row; the game stays playable and stable.
   await page.evaluate(() => window.RA.openGame('tetris'));
@@ -1775,10 +2027,12 @@ function soakRun(arg) {
   const id = arg.id;
   let seed = arg.seed;
   const rnd = function () { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
-  const KEYS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' ', 'a', 'd', 'w', 's', 'p', 'x'];
+  const KEYS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' ', 'a', 'd', 'w', 's', 'x'];
+  let pausedByMe = false;
+  let pausedScore = 0;
   const held = {};
   const problems = [];
-  const stats = { games: 0, best: 0, frames: 0, wins: 0 };
+  const stats = { games: 0, best: 0, frames: 0, wins: 0, pauses: 0 };
   const bad = function (msg) { if (problems.length < 8 && problems.indexOf(msg) < 0) problems.push(msg); };
   if (RA.currentId !== id) RA.openGame(id);
   const canvas = document.querySelector('.arcade-stage canvas');
@@ -1802,7 +2056,18 @@ function soakRun(arg) {
       // Random keys: press and release at random.
       if (rnd() < 0.12) {
         const k = KEYS[Math.floor(rnd() * KEYS.length)];
-        if (k === 'p' && rnd() < 0.7) { /* pause less often */ } else if (held[k]) { held[k] = false; window.__key('keyup', k); } else { held[k] = true; window.__key('keydown', k); }
+        if (held[k]) { held[k] = false; window.__key('keyup', k); } else { held[k] = true; window.__key('keydown', k); }
+      }
+      // Now and then: pause with P, stay paused for some frames (keys keep coming), resume with P.
+      if (!pausedByMe && rnd() < 0.004) {
+        window.__tap('p');
+        pausedByMe = true;
+        stats.pauses += 1;
+        pausedScore = d.state.score;
+      } else if (pausedByMe) {
+        if (window.__t.texts.indexOf('PAUSA') < 0) bad('no PAUSA text while paused');
+        if (d.state.score !== pausedScore) bad('score changed while paused');
+        if (rnd() < 0.08) { window.__tap('p'); pausedByMe = false; }
       }
       if (id === 'bubbles' && rnd() < 0.05) {
         const r = canvas.getBoundingClientRect();
@@ -1810,7 +2075,6 @@ function soakRun(arg) {
         canvas.dispatchEvent(new MouseEvent('mousemove', init));
         if (rnd() < 0.7) canvas.dispatchEvent(new MouseEvent('mousedown', init));
       }
-      if (id === 'tetris' && d.paused && rnd() < 0.2) window.__tap('p');
     }
     window.__vtick(1, 1000 / 60);
     stats.frames += 1;
@@ -1854,6 +2118,7 @@ function soakRun(arg) {
     }
   }
   Object.keys(held).forEach((k) => { if (held[k]) window.__key('keyup', k); });
+  if (pausedByMe) window.__tap('p');
   return { stats: stats, problems: problems, seed: seed };
 }
 
@@ -1862,7 +2127,7 @@ async function scenarioSoak(browser) {
   const page = await newPage(browser, { virtualClock: true });
   const SECONDS = Number(process.env.SOAK_SECONDS || 120); // simulated seconds per game
   for (const id of ARCADE) {
-    const total = { games: 0, best: 0, frames: 0, wins: 0 };
+    const total = { games: 0, best: 0, frames: 0, wins: 0, pauses: 0 };
     const problems = [];
     let seed = 12345 + id.length * 977;
     for (let done = 0; done < SECONDS; done += 20) {
@@ -1871,11 +2136,12 @@ async function scenarioSoak(browser) {
       total.games += r.stats.games;
       total.frames += r.stats.frames;
       total.wins += r.stats.wins;
+      total.pauses += r.stats.pauses;
       total.best = Math.max(total.best, r.stats.best);
       r.problems.forEach((p) => { if (!problems.includes(p)) problems.push(p); });
     }
     check(id + ': ' + SECONDS + ' s of random play (' + total.games + ' games) keeps the state and the cards in order', problems.length === 0, problems.join('; '));
-    check(id + ': random play started several games', total.games >= 2, JSON.stringify(total));
+    check(id + ': random play started several games and paused some of them', total.games >= 2 && total.pauses >= 2, JSON.stringify(total));
     check.note(id + ': ' + total.games + ' games, best score ' + total.best + (total.wins ? ', levels won ' + total.wins : ''));
     await page.evaluate(() => window.RA.showMenu());
   }

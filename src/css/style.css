@@ -498,8 +498,11 @@ body.arcade-mode #topbar { background: #0c0c10; border-bottom-color: #2a2a35; }
 .mj-tile.sel { outline: 4px solid #f6c945; outline-offset: -1px; filter: brightness(1.08); }
 .mj-tile.hint { outline: 5px solid #ff3d7f; outline-offset: -1px; filter: brightness(1.1); animation: blink 0.7s ease-in-out infinite; }
 @keyframes blink { 50% { outline-color: #ffd0e0; } }
-.mj-bar { align-items: center; gap: 8px; }
-.mj-bar .btn { padding: 7px 14px; font-size: 15px; }
+.mj-bar { align-items: center; gap: 6px; flex-wrap: nowrap; }
+.mj-bar .btn { padding: 6px 10px; font-size: 14px; white-space: nowrap; }
+.mj-bar .pill { padding: 4px 9px; font-size: 16px; white-space: nowrap; }
+.mj-bar .mj-title { font-size: 22px; margin-right: 4px; }
+@media (max-width: 1000px) { .mj-bar { flex-wrap: wrap; } }
 
 /* ---------- Dama ---------- */
 .dama.tabletop { background: linear-gradient(160deg, #3b2416, #24150d) padding-box, linear-gradient(135deg, #6b4226, #3a2214 45%, #7a4e2c 55%, #2c190f) border-box; }

@@ -279,25 +279,37 @@
       if (!over) cpuTurn();
     }
 
+    // Several captures can share start and end. Routes that give the same position count as one.
+    // When they differ, the player picks the piece to take at the first point where they differ.
+    function askRoute(cands) {
+      const seen = {};
+      const unique = cands.filter(function (m) {
+        const k = JSON.stringify(applyMove(board, m));
+        if (seen[k]) return false;
+        seen[k] = true;
+        return true;
+      });
+      if (unique.length === 1) return humanMove(unique[0]);
+      let at = 0;
+      while (unique.every(function (m) { return m.caps[at] === unique[0].caps[at]; })) at += 1;
+      choice = { moves: unique, at: at };
+      note = 'Puoi mangiare in due modi. Tocca il pezzo che vuoi mangiare.';
+      if (A) A.sfx.click();
+      render();
+    }
+
     function clickSquare(sq) {
       if (over || turn !== WHITE || thinking) return;
       const moves = legalMoves(board, WHITE);
-      // Two captures with the same start and end: the player picks the first piece to take.
       if (choice) {
-        const picked = choice.find(function (m) { return m.caps[0] === sq; });
+        const picked = choice.moves.filter(function (m) { return m.caps[choice.at] === sq; });
         choice = null;
-        if (picked) return humanMove(picked);
+        note = '';
+        if (picked.length) return askRoute(picked);
       }
       if (selected !== null) {
         const same = moves.filter(function (m) { return m.from === selected && m.to === sq; });
-        const firsts = same.map(function (m) { return m.caps[0]; });
-        if (same.length > 1 && new Set(firsts).size > 1) {
-          choice = same;
-          note = 'Puoi mangiare in due modi. Tocca il primo pezzo che vuoi mangiare.';
-          if (A) A.sfx.click();
-          return render();
-        }
-        if (same.length) return humanMove(same[0]);
+        if (same.length) return askRoute(same);
       }
       const p = board[sq];
       if (p && p.c === WHITE) {
@@ -323,7 +335,7 @@
       const moves = myTurn ? legalMoves(board, WHITE) : [];
       const movable = new Set(moves.map(function (m) { return m.from; }));
       const targets = choice
-        ? new Set(choice.map(function (m) { return m.caps[0]; }))
+        ? new Set(choice.moves.map(function (m) { return m.caps[choice.at]; }))
         : new Set(moves.filter(function (m) { return m.from === selected; }).map(function (m) { return m.to; }));
       const mustCapture = moves.length > 0 && moves[0].caps.length > 0;
 

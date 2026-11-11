@@ -5,26 +5,17 @@
 // blocked games, positions for the double click checks).
 //
 // Run:  node tests/e2e/cards.e2e.js [--seed N] [--matches 2] [--hands 5] [--games 4]
-//                                   [--shots DIR] [--src DIR] [--known-ok] [--verbose]
+//                                   [--shots DIR] [--src DIR] [--verbose]
 //   --seed N     seed for Math.random in the page and for the test player (default 7)
 //   --shots DIR  save screenshots into DIR
 //   --src DIR    test another copy of the app (folder that holds index.html)
-//   --known-ok   known bugs (the BUG-n checks) are printed but do not make the run fail
 // Exit code: 0 when every check passes, 1 when a check fails, 2 when the run aborts.
 // A full run takes about 90 seconds. The first 15 seconds run in real time, the rest drives
 // the page clock (page.clock), so the 0.7 to 1.5 second pauses of the opponent cost no time.
 //
-// Known bugs have their own checks (BUG-n). They make the run fail until the bug is fixed:
-//   BUG-1 Solitario: in a window lower than about 740 px, face-up cards of a column lie on top of each other
-//   BUG-2 Solitario: in a long column the covered cards show a strip too thin to read their value
-//   BUG-3 Solitario: in a blocked game the hint only repeats "draw from the stock"
-//   BUG-4 Solitario: "Nuova partita" does not stop a running "Completa da solo"
-//   BUG-5 Solitario: a double click on a card with several destinations does nothing
-//   BUG-6 Solitario: a double click on the waste moves two cards
-//   BUG-7 Solitario: one click on a final pile takes its top card back to a column
-//   BUG-8 Solitario: a click on a covered card of a column must reach that card (passes today)
-//   BUG-9 Scopa: a double click on the last card of a round closes the round-end table
-//   BUG-10 Scopa: a double click on "Prossima mano" / "Nuova partita" plays a card of the new hand
+// Defects found by earlier runs are covered by ordinary checks: double clicks (one action only),
+// the pause before the Scopa points table, the layout of long Solitario columns in low windows,
+// a blocked Solitario game, "Completa da solo" stopped by a new game or an undo.
 //
 // The rules are checked against an independent implementation written in this file,
 // not against the game modules. Texts are checked with loose patterns (card names, numbers,
@@ -51,7 +42,6 @@ const MATCHES = Number(opt('matches', 2));
 const HANDS = Number(opt('hands', 5));
 const GAMES = Number(opt('games', 4));
 const SHOTS = opt('shots', null);
-const KNOWN_OK = !!opt('known-ok', false);
 const VERBOSE = !!opt('verbose', false);
 const SRC = opt('src', null);
 const URL = 'file://' + path.resolve(SRC || path.join(__dirname, '..', '..', 'src'), 'index.html');
@@ -84,13 +74,12 @@ const OPPONENT = /chihuahua|avversario|computer|gatto/i;
 
 const stats = {
   checks: 0,
-  scopa: { matches: 0, rounds: 0, humanPlays: 0, cpuPlays: 0, multiChoice: 0, cancels: 0, scope: [0, 0], ignoredClicks: 0, doubleClicks: 0, finals: [] },
+  scopa: { matches: 0, rounds: 0, humanPlays: 0, cpuPlays: 0, multiChoice: 0, tableChoice: 0, cancels: 0, scope: [0, 0], ignoredClicks: 0, doubleClicks: 0, finals: [] },
   briscola: { hands: 0, tricks: 0, ignoredClicks: 0, doubleClicks: 0, results: [], minShownMs: Infinity },
   solitario: { games: 0, clicks: 0, moves: 0, draws: 0, recycles: 0, undos: 0, multiDest: 0, foundationMoves: 0, hintsShown: 0, refused: 0, naturalWins: 0, blocked: 0, preparedWins: 0 },
   escapes: 0,
 };
 const failures = new Map(); // key -> { count, first }
-const bugs = new Map(); // id -> { title, present, detail }
 const pageErrors = [];
 
 function check(cond, key, detail) {
@@ -101,17 +90,6 @@ function check(cond, key, detail) {
   failures.set(key, f);
   if (VERBOSE) console.log('  FAIL ' + key + (f.first !== undefined ? ' :: ' + J(f.first) : ''));
   return false;
-}
-// A check for a known bug. ok = true means the bug is not present (any more).
-function bugCheck(id, ok, title, detail) {
-  stats.checks += 1;
-  const b = bugs.get(id) || { title: title, present: false, detail: null, runs: 0 };
-  b.runs += 1;
-  if (!ok) {
-    b.present = true;
-    if (!b.detail) b.detail = typeof detail === 'function' ? detail() : detail;
-  }
-  bugs.set(id, b);
 }
 
 let browser;
@@ -170,6 +148,8 @@ function layoutChecks(game, lay, where) {
 }
 // Installed in the page before its scripts run. Shared layout facts and the visible text of a panel.
 function installLayoutProbe() {
+  window.__e2eResizes = 0;
+  window.addEventListener('resize', function () { window.__e2eResizes += 1; });
   // Text of a game panel without the cards and without the overlay; pieces are joined with ' | '.
   window.__e2eText = function (panel) {
     const out = [];
@@ -244,7 +224,7 @@ function scopaSnap() {
         panels: q('#stage .game-panel').length,
         text: window.__e2eText(panel),
         pills: q('.scopa .pill').map((e) => e.textContent),
-        table: q('.scopa .felt [data-card]:not(.played)').map((e) => ({ id: Number(e.dataset.card), selected: e.classList.contains('selected') })),
+        table: q('.scopa .felt [data-card]:not(.played)').map((e) => ({ id: Number(e.dataset.card), selected: e.classList.contains('selected'), disabled: e.classList.contains('disabled') })),
         played: q('.scopa .felt .played[data-card]').map((e) => Number(e.dataset.card)),
         hand: q('.scopa .hand.me [data-card]').map((e) => ({ id: Number(e.dataset.card), disabled: e.classList.contains('disabled'), selected: e.classList.contains('selected') })),
         handBottom: hr ? hr.bottom + window.scrollY : null,
@@ -269,7 +249,8 @@ function scopaInvariants(s, where) {
   check(st.hands[0].length <= 3 && st.hands[1].length <= 3, 'scopa: at most 3 cards in hand');
   check(Math.abs(st.hands[0].length - st.hands[1].length) <= 1, 'scopa: hands differ by at most one card');
   check(s.dom.panels === 1, 'scopa: exactly one game panel in the stage', s.dom.panels);
-  check(J(ids(s.dom.table)) === J(ids(st.table)), 'scopa: table on screen equals table in state', () => ({ where, dom: ids(s.dom.table), st: ids(st.table) }));
+  const pause = st.ended && !s.dom.overlay; // the last table may stay on screen before the points table
+  if (!pause) check(J(ids(s.dom.table)) === J(ids(st.table)), 'scopa: table on screen equals table in state', () => ({ where, dom: ids(s.dom.table), st: ids(st.table) }));
   check(J(ids(s.dom.hand)) === J(ids(st.hands[0])), 'scopa: hand on screen equals hand in state', () => ({ where }));
   check(s.dom.cpuBacks + s.dom.played.length === st.hands[1].length, 'scopa: opponent card backs equal opponent hand size', () => ({ where, backs: s.dom.cpuBacks, played: s.dom.played, hand: st.hands[1].length }));
   const pillText = s.dom.pills.join(' | ');
@@ -286,7 +267,9 @@ function scopaInvariants(s, where) {
   const myTurn = !s.busy && !st.ended && st.turn === 0;
   check(s.dom.hand.every((h) => h.disabled === !myTurn), 'scopa: hand cards are marked disabled exactly when it is not the human turn', () => ({ where, myTurn, hand: s.dom.hand }));
   if (!myTurn) check(s.dom.buttons.length === 0, 'scopa: no capture buttons when it is not the human turn', s.dom.buttons);
-  if (!st.table.length && !s.dom.played.length) check(/tavolo.*vuoto/i.test(s.dom.text), 'scopa: empty table note');
+  if (!pause && !st.table.length && !s.dom.played.length) check(/tavolo.*vuoto/i.test(s.dom.text), 'scopa: empty table note');
+  if (!s.dom.buttons.length) check(s.dom.table.every((t) => t.disabled), 'scopa: table cards are not clickable outside the choice of a capture', () => ({ where }));
+  if (st.ended && !s.dom.overlay) check(/Mano finita/i.test(s.dom.msg || ''), 'scopa: the message says that the round is finished while the table is still shown', s.dom.msg);
   layoutChecks('scopa', s.lay, where);
   if (s.dom.handBottom !== null && s.lay.innerH >= 800) {
     const over = Math.round(s.dom.handBottom - s.lay.innerH);
@@ -325,6 +308,7 @@ function verifyScopaPlay(pre, post, player, cardId, takeIds, tr) {
     check(takeIds.concat(cardId).every((id) => cap.indexOf(id) >= 0), 'scopa: captured cards go to the capturing player');
   }
   if (roundOver) {
+    tr.leftAtEnd = ids(tableAfter);
     check(b.table.length === 0, 'scopa: table is empty at the end of the round', ids(b.table));
     if (tr.lastTaker !== null) {
       const cap = ids(b.captured[tr.lastTaker]);
@@ -350,6 +334,7 @@ function verifyScopaPlay(pre, post, player, cardId, takeIds, tr) {
   else ok = ok && msg.indexOf('posato ' + cardName(card)) >= 0;
   ok = ok && /scopa!/i.test(msg) === expectScopa;
   if (player === 1 && !roundOver) ok = ok && /Tocca a te/.test(msg);
+  if (roundOver) ok = ok && /Mano finita/i.test(msg);
   check(ok, 'scopa: message describes the play (' + who + ')', () => ({ got: msg, card: cardName(card), taken: taken.map(cardName), expectScopa }));
 }
 
@@ -385,7 +370,7 @@ async function scopaCpuTurn(tr) {
   }
   const done = await waitUntil(() => {
     const g = window.RA.current.debug;
-    return !g.busy || !!document.querySelector('.scopa .overlay');
+    return !g.busy || g.state.ended;
   }, 4000);
   if (!check(!!done, 'scopa: the opponent finishes its turn within 4 seconds')) throw new Error('scopa: opponent turn did not finish');
   const post = await scopaSnap();
@@ -439,7 +424,8 @@ async function scopaHumanTurn(tr) {
       await loc.click();
     }
   } else {
-    await loc.click();
+    // A double click opens the choice like one click: it must not play anything.
+    if (rnd() < 0.4) { await loc.dblclick(); stats.scopa.doubleClicks += 1; } else await loc.click();
     let c = await scopaSnap();
     scopaInvariants(c, 'choosing');
     check(J(c.state) === J(pre.state), 'scopa: nothing is played before the capture is chosen');
@@ -458,24 +444,35 @@ async function scopaHumanTurn(tr) {
       check(J(c.state) === J(pre.state) && c.dom.buttons.length === 0 && /Scegli una carta/.test(c.dom.msg || ''), 'scopa: Annulla closes the choice and plays nothing', c.dom.msg);
       stats.scopa.cancels += 1;
       await loc.click();
+      c = await scopaSnap();
+    }
+    // A table card that belongs to exactly one capture can be clicked to choose that capture.
+    const inOpts = (id) => ch.opts.filter((o) => o.indexOf(id) >= 0).length;
+    check(c.dom.table.every((t) => t.disabled === (inOpts(t.id) !== 1)), 'scopa: during the choice, exactly the table cards of one single capture are clickable', () => c.dom.table.map((t) => ({ id: t.id, disabled: t.disabled, captures: inOpts(t.id) })));
+    const dead = c.dom.table.filter((t) => inOpts(t.id) !== 1);
+    if (dead.length) {
+      await page.locator('.scopa .felt [data-card="' + pick(dead).id + '"]').click();
+      const d = await scopaSnap();
+      check(J(d.state) === J(pre.state) && d.dom.buttons.length === c.dom.buttons.length, 'scopa: during the choice, a click on a table card of no capture or of several captures changes nothing');
+      stats.scopa.ignoredClicks += 1;
     }
     const k = Math.floor(rnd() * ch.opts.length);
     take = ch.opts[k];
-    if (idx[k] < 0) throw new Error('scopa: capture button not found: ' + J(optCards[k].map(cardName)) + ' in ' + J(c.dom.buttons));
-    await page.locator('.scopa .actions button').nth(idx[k]).click();
+    const own = take.filter((id) => inOpts(id) === 1);
+    if (own.length && rnd() < 0.6) {
+      await page.locator('.scopa .felt [data-card="' + pick(own) + '"]').dblclick();
+      stats.scopa.tableChoice += 1;
+    } else {
+      if (idx[k] < 0) throw new Error('scopa: capture button not found: ' + J(optCards[k].map(cardName)) + ' in ' + J(c.dom.buttons));
+      await page.locator('.scopa .actions button').nth(idx[k]).click();
+    }
     stats.scopa.multiChoice += 1;
   }
   const post = await scopaSnap();
-  if (lastPlay && dbl) {
-    // The round-end table must still be open after a double click on the last card.
-    const skipped = !post.dom.overlay;
-    bugCheck('BUG-9', !skipped, 'Scopa: a double click on the last card of a round also presses the button of the round-end table, which appears under the pointer: the table of the points closes before it can be read (the next round or a new match starts at once)',
-      { round: tr.round, scoresBeforeTheRound: tr.scores.slice(), afterTheDoubleClick: { round: post.match.round, deck: post.state.deck.length, message: post.dom.msg } });
-    if (skipped) {
-      scopaSkippedRoundEnd(pre, ch.card, take, tr, post);
-      stats.scopa.humanPlays += 1;
-      return;
-    }
+  if (lastPlay) {
+    // The table stays on screen first: a double click on the last card must not reach the points table.
+    check(post.state.ended && !post.dom.overlay && post.match.round === pre.match.round, 'scopa: after the last card (also with a double click) the round is over and the points table is not yet shown',
+      () => ({ ended: post.state.ended, overlay: !!post.dom.overlay, round: post.match.round }));
   }
   scopaInvariants(post, 'after human play');
   check(post.state.last && post.state.last.player === 0 && post.state.last.card.id === ch.card.id, 'scopa: one click (or a double click) plays exactly the clicked card', () => post.state.last);
@@ -483,38 +480,26 @@ async function scopaHumanTurn(tr) {
   stats.scopa.humanPlays += 1;
 }
 
-// The round-end table was closed by the second click of a double click (BUG-9).
-// Works out the result of the round from the last snapshot, so the test can go on.
-function scopaSkippedRoundEnd(pre, card, take, tr, post) {
-  const a = pre.state;
-  const cap = [a.captured[0].slice(), a.captured[1].slice()];
-  const left = a.table.filter((c) => take.indexOf(c.id) < 0);
-  if (take.length) {
-    cap[0] = cap[0].concat(a.table.filter((c) => take.indexOf(c.id) >= 0), [card]);
-    tr.lastTaker = 0;
-  } else left.push(card);
-  if (tr.lastTaker !== null) cap[tr.lastTaker] = cap[tr.lastTaker].concat(left);
-  const exp = scopaScore(cap, tr.scope);
-  tr.scores[0] += exp.pts[0];
-  tr.scores[1] += exp.pts[1];
-  stats.scopa.rounds += 1;
-  const over = Math.max(tr.scores[0], tr.scores[1]) >= 11 && tr.scores[0] !== tr.scores[1];
-  if (over) {
-    stats.scopa.matches += 1;
-    stats.scopa.finals.push(tr.scores.slice());
-    tr.scores = [0, 0];
-    tr.round = 1;
-  } else {
-    tr.round += 1;
-  }
-  check(J(post.match.scores) === J(tr.scores) && post.match.round === tr.round, 'scopa: match score is the sum of the rounds (round-end table skipped)', () => ({ got: post.match, expected: tr.scores, round: tr.round }));
-  tr.scope = [0, 0];
-  tr.lastTaker = null;
-  scopaInvariants(post, 'new round after a skipped table');
-}
-
 async function scopaRoundEnd(tr) {
-  const s = await scopaSnap();
+  let s = await scopaSnap();
+  if (!s.dom.overlay) {
+    // The table and the last play stay visible for about 1.5 seconds. Clicks do nothing meanwhile.
+    scopaInvariants(s, 'pause at the end of the round');
+    check(s.state.ended && s.busy, 'scopa: busy during the pause at the end of the round');
+    if (tr.leftAtEnd && tr.leftAtEnd.length) {
+      check(tr.leftAtEnd.every((id) => ids(s.dom.table).indexOf(id) >= 0), 'scopa: during the pause after the last card, the cards left on the table are still shown (they go to the last taker)',
+        () => ({ leftOnTheTable: tr.leftAtEnd.map((id) => cardName(byId(id))), shown: s.dom.table.length, text: s.dom.msg }));
+    }
+    if (SHOTS && !scopaRoundEnd.shot) { scopaRoundEnd.shot = true; await shot('scopa-round-end-pause'); }
+    await page.mouse.click(560, 600);
+    await page.mouse.click(560, 600);
+    await tick(1000);
+    const mid = await scopaSnap();
+    check(!mid.dom.overlay && J(mid.state) === J(s.state) && J(mid.match) === J(s.match), 'scopa: the points table does not appear in the first second after the last card, and clicks change nothing');
+    const up = await waitUntil(() => !!document.querySelector('.scopa .overlay'), 1500);
+    if (!check(!!up, 'scopa: the points table appears within 2.5 seconds after the last card')) throw new Error('scopa: no points table');
+    s = await scopaSnap();
+  }
   const st = s.state;
   stats.scopa.rounds += 1;
   const exp = scopaScore(st.captured, tr.scope);
@@ -559,7 +544,7 @@ async function scopaRoundEnd(tr) {
   check(!n.dom.overlay, 'scopa: the overlay closes');
   const unwanted = n.state.last && n.state.last.player === 0 ? n.state.last : null;
   if (humanNext) {
-    bugCheck('BUG-10', !unwanted && n.dom.buttons.length === 0, 'Scopa: a double click on "Prossima mano" or "Nuova partita" also hits the hand card that appears under the pointer: a card of the new hand is played (or the capture choice opens) without the player wanting it',
+    check(!unwanted && n.dom.buttons.length === 0, 'scopa: a double click on "Prossima mano" or "Nuova partita" does not play a card of the new hand',
       () => ({ afterRound: tr.round, matchOver: over, cardPlayedByTheSecondClick: unwanted ? cardName(unwanted.card) : null, taken: unwanted ? unwanted.taken.map(cardName) : null, choiceButtons: n.dom.buttons }));
   }
   if (over) {
@@ -575,7 +560,7 @@ async function scopaRoundEnd(tr) {
   tr.scope = [0, 0];
   tr.lastTaker = null;
   if (unwanted) {
-    // BUG-10 happened: the human has already played. Keep the test tracker in step with the game.
+    // A card was played by the second click. Keep the test tracker in step with the game.
     if (unwanted.taken.length) tr.lastTaker = 0;
     if (unwanted.scopa) { tr.scope[0] += 1; stats.scopa.scope[0] += 1; }
     stats.scopa.humanPlays += 1;
@@ -583,6 +568,7 @@ async function scopaRoundEnd(tr) {
   } else {
     check(n.state.turn === (tr.round % 2 === 1 ? 0 : 1), 'scopa: the first player alternates every round', { round: tr.round, turn: n.state.turn });
     check(n.state.deck.length === 30 && n.state.table.length === 4 && n.state.hands[0].length === 3 && n.state.hands[1].length === 3, 'scopa: deal is 4 on the table and 3 each');
+    check(n.state.table.filter((c) => c.rank === 10).length < 3, 'scopa: a deal never has 3 or 4 Re on the table', () => n.state.table);
     if (!n.dom.buttons.length) check(n.state.turn === 0 ? /Tocca a te/.test(n.dom.msg || '') : (OPPONENT.test(n.dom.msg || '') && !/Tocca a te/.test(n.dom.msg || '')), 'scopa: first message of the round says who starts', n.dom.msg);
   }
   scopaInvariants(n, 'new round');
@@ -591,12 +577,12 @@ async function scopaRoundEnd(tr) {
 // Plays until `stop(tr)` says so.
 async function scopaLoop(tr, stop) {
   for (let guard = 0; guard < 5000; guard++) {
-    if (stop(tr)) return;
     const s = await page.evaluate(() => {
       const g = window.RA.current.debug;
-      return { overlay: !!document.querySelector('.scopa .overlay'), turn: g.state.turn, busy: g.busy };
+      return { overlay: !!document.querySelector('.scopa .overlay'), turn: g.state.turn, busy: g.busy, ended: g.state.ended };
     });
-    if (s.overlay) await scopaRoundEnd(tr);
+    if (stop(tr, s)) return;
+    if (s.overlay || s.ended) await scopaRoundEnd(tr);
     else if (s.turn === 1) await scopaCpuTurn(tr);
     else await scopaHumanTurn(tr);
     noErrors('scopa');
@@ -686,7 +672,7 @@ function brInvariants(s, where, showing) {
     check(st.deck[st.deck.length - 1].id === st.trumpCard.id, 'briscola: the briscola card is the last card of the deck');
     check(s.dom.extra.length === 1 && s.dom.extra[0].id === st.trumpCard.id && s.dom.extra[0].opacity > 0.99, 'briscola: the briscola card is shown while the deck has cards', s.dom.extra);
   } else {
-    check(s.dom.extra.every((e) => e.id === st.trumpCard.id && e.opacity < 0.7), 'briscola: once drawn, the briscola card is hidden or clearly faded', s.dom.extra);
+    check(s.dom.extra.length === 0, 'briscola: once drawn, the briscola card is no longer shown on the table', s.dom.extra);
   }
   const tm = /Briscola:?[\s|]*(Coppe|Denari|Spade|Bastoni)/.exec(s.dom.text);
   check(tm && tm[1] === SUIT_NAMES[st.trumpSuit] && st.trumpSuit === st.trumpCard.suit, 'briscola: the briscola suit is named on screen', () => ({ found: tm && tm[0], suit: SUIT_NAMES[st.trumpSuit] }));
@@ -980,7 +966,8 @@ function solInvariants(s, where) {
   check(s.won === (done === 40), 'solitario: won exactly when the 40 cards are in the final piles');
   check((!!s.dom.overlay || s.dom.cascade) === s.won, 'solitario: the win screen shows exactly when the game is won', () => ({ where, won: s.won, overlay: !!s.dom.overlay, cascade: s.dom.cascade }));
   layoutChecks('solitario', s.lay, where);
-  bugCheck('BUG-8', s.dom.miss.length === 0, 'Solitario: on some covered cards of a column a click does not reach the card it points at (dead zone or wrong card)', () => ({ where, miss: s.dom.miss.slice(0, 3) }));
+  check(s.dom.miss.length === 0, 'solitario: a click on the visible part of any face-up card of a column reaches that card', () => ({ where, miss: s.dom.miss.slice(0, 3) }));
+  if (s.dom.minStrip !== null) check(s.dom.minStrip >= 23.5, 'solitario: every covered face-up card shows a strip of 24 px or more', () => ({ where, minStrip: s.dom.minStrip, innerH: s.lay.innerH }));
   if (s.dom.minStrip !== null) solInvariants.minStrip = Math.min(solInvariants.minStrip, s.dom.minStrip);
   solInvariants.maxBottom = Math.max(solInvariants.maxBottom, s.dom.bottom - s.lay.innerH);
 }
@@ -1074,11 +1061,11 @@ async function solDoMove(pre, src, dst) {
   const dests = solDests(st, src);
   check(dests.some((d) => sameDst(d, dst)), 'solitario: the suggested move is legal by the rules', () => ({ src, dst, dests }));
   await solClickSrc(st, src);
-  if (dests.length > 1) {
+  if (dests.length > 1 || src.type === 'found') {
     const sel = await solSnap();
     solInvariants(sel, 'selection');
     check(J(sel.state) === J(st), 'solitario: with several destinations the first click only selects');
-    check(sel.dom.msg !== pre.dom.msg && /scegli|più posti|dove/i.test(sel.dom.msg || ''), 'solitario: message asks for the destination', sel.dom.msg);
+    check(/scegli|più posti|dove|illuminata/i.test(sel.dom.msg || ''), 'solitario: message asks for the destination', sel.dom.msg);
     const marked = [];
     sel.dom.found.forEach((f, suit) => { if (/\bdest\b/.test(f.cls)) marked.push({ type: 'found', suit: suit }); });
     sel.dom.cols.forEach((c, ci) => { if (/\bdest\b/.test(c.cls)) marked.push({ type: 'tab', col: ci }); });
@@ -1094,6 +1081,7 @@ async function solDoMove(pre, src, dst) {
       await solClickSrc(st, src);
       const un = await solSnap();
       check(J(un.state) === J(st) && !un.dom.cols.some((c) => /\bdest\b/.test(c.cls)) && !un.dom.found.some((f) => /\bdest\b/.test(f.cls)), 'solitario: clicking the selected card again removes the selection');
+      check(!/più posti|illuminata/i.test(un.dom.msg || ''), 'solitario: once the selection is removed, the message no longer asks to choose a place', un.dom.msg);
       await solClickSrc(st, src);
     }
     await solClickDst(dst);
@@ -1294,16 +1282,26 @@ async function solPreparedTests() {
     if (suit === 1) { s = await solUndoCheck(before, s); s = await solDoMove(s, { type: 'tab', col: 2, idx: 0 }, { type: 'found', suit: 1 }); }
   }
   check(s.won, 'solitario: the game is won after the last card');
-  if (s.dom.cascade) { await tick(1500); await shot('solitario-win-animation'); }
+  const wonAt = await page.evaluate(() => Date.now());
+  if (s.dom.cascade) {
+    check(/saltare/i.test(s.dom.text), 'solitario: the win animation says that a click skips it');
+    await tick(1500);
+    await shot('solitario-win-animation');
+  }
   s = await solWinBox(false);
+  const boxAfter = (await page.evaluate(() => Date.now())) - wonAt;
+  check(boxAfter <= 9000, 'solitario: the win box appears at most 9 seconds after the last card', boxAfter);
   check(s.dom.overlay && /vinto|riuscito|complimenti/i.test(s.dom.overlay.h2 || ''), 'solitario: win title', s.dom.overlay);
   check(s.dom.overlay && new RegExp('Mosse:\\s*' + s.state.moves + '\\b').test(s.dom.overlay.text), 'solitario: win text shows the moves', s.dom.overlay && s.dom.overlay.text);
   await shot('solitario-win');
-  // The win box must cover the buttons: Annulla cannot be reached with the mouse.
-  const undoBox = await solBtn(/Annulla/).boundingBox();
-  await clickAt(undoBox);
+  // The win layer covers the buttons of the game: nothing under it can be reached with the mouse.
+  const covered = await page.evaluate(() => Array.from(document.querySelectorAll('.solitario .actions button, .solitario [data-role="stock"]')).every((b) => {
+    const r = b.getBoundingClientRect();
+    const e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return !!e && !!e.closest('.overlay');
+  }));
+  check(covered, 'solitario: after the win the win box layer covers the buttons and the stock');
   let after = await solSnap();
-  check(after.won && J(after.state) === J(s.state), 'solitario: after the win a click on Annulla (under the win box) changes nothing');
   await page.locator('.solitario .overlay button').dblclick();
   s = await solSnap();
   check(!s.won && !s.dom.overlay && s.state.moves === 0 && s.state.stock.length === 12 && s.state.tableau.every((col, i) => col.length === i + 1), 'solitario: Nuova partita after the win deals a new game (a double click on it moves nothing)');
@@ -1323,9 +1321,9 @@ async function solPreparedTests() {
   await page.locator('.solitario .overlay button').click();
   stats.solitario.preparedWins += 1;
 
-  // --- 3. BUG-4: "Nuova partita" while "Completa da solo" is running.
+  // --- 3. "Nuova partita" and "Annulla" stop a running "Completa da solo".
   let leaked = null;
-  for (let attempt = 0; attempt < 12 && !leaked; attempt++) {
+  for (let attempt = 0; attempt < 6 && !leaked; attempt++) {
     await solLoad(solDeepState());
     await solBtn(/Completa da solo/).click();
     await solBtn(/Nuova partita/).click();
@@ -1336,7 +1334,17 @@ async function solPreparedTests() {
     if (J(later.state) !== J(fresh.state)) leaked = { movesMadeByItself: later.state.moves, cardsInFinalPiles: later.state.foundation.map((p) => p.length) };
     solInvariants(later, 'after new game during auto-finish');
   }
-  bugCheck('BUG-4', !leaked, 'Solitario: "Nuova partita" pressed while "Completa da solo" runs does not stop it: the new game moves cards to the final piles by itself', leaked);
+  check(!leaked, 'solitario: "Nuova partita" stops a running "Completa da solo" (the new game does not move by itself)', leaked);
+  await solLoad(solDeepState());
+  await solBtn(/Completa da solo/).click();
+  await tick(300);
+  const running = await solSnap();
+  check(running.state.moves >= 2 && !running.won, 'test setup: "Completa da solo" is running', running.state.moves);
+  await solBtn(/Annulla/).click();
+  const undone = await solSnap();
+  await tick(1500);
+  after = await solSnap();
+  check(undone.state.moves === running.state.moves - 1 && J(after.state) === J(undone.state) && !after.won, 'solitario: "Annulla" stops a running "Completa da solo"', () => ({ running: running.state.moves, undone: undone.state.moves, later: after.state.moves }));
 
   // --- 4. Several destinations: final pile or one of two columns.
   st = solEmptyState();
@@ -1359,37 +1367,74 @@ async function solPreparedTests() {
   await page.locator('.solitario .col[data-col="5"]').click({ position: { x: 30, y: 30 } });
   after = await solSnap();
   check(J(after.state) === J(s.state), 'solitario: with a selection, a click on a column that is not a destination moves nothing');
+  // Selection, then a double click on a destination: the card moves once and nothing else moves.
+  s = await solLoad(st);
+  await page.locator('.solitario [data-role="waste"]').click();
+  await page.locator('.solitario .col[data-col="1"] > .pcard').last().dblclick();
+  after = await solSnap();
+  check(J(after.state) === J(solApply(s.state, { type: 'waste' }, { type: 'tab', col: 1 })), 'solitario: a double click on a destination moves the selected card once');
 
-  // --- 5. BUG-3: a blocked game. Every face-up card and every stock card is Coppe or Denari
-  // and no Asso is reachable, so nothing can ever move. The hint must say so at some point.
-  st = solEmptyState();
-  const warm = [];
-  for (let suit = 0; suit < 2; suit++) for (let r = 2; r <= 10; r++) warm.push(mk(suit, r));
-  const cool = [mk(0, 1), mk(1, 1)];
-  for (let suit = 2; suit < 4; suit++) for (let r = 1; r <= 10; r++) cool.push(mk(suit, r));
-  for (let c = 0; c < 7; c++) {
-    for (let i = 0; i < (c < 1 ? 4 : 3); i++) st.tableau[c].push(down(cool.pop()));
-    st.tableau[c].push(up(warm.pop()));
-  }
-  warm.forEach((c) => st.stock.push(down(c)));
+  // --- 5. A blocked game. Every face-up card and every stock card is Coppe or Denari
+  // and no Asso is reachable, so nothing can ever move. The hint must say so.
+  const blockedState = function () {
+    const b = solEmptyState();
+    const warm = [];
+    for (let suit = 0; suit < 2; suit++) for (let r = 2; r <= 10; r++) warm.push(mk(suit, r));
+    const cool = [mk(0, 1), mk(1, 1)];
+    for (let suit = 2; suit < 4; suit++) for (let r = 1; r <= 10; r++) cool.push(mk(suit, r));
+    for (let c = 0; c < 7; c++) {
+      for (let i = 0; i < (c < 1 ? 4 : 3); i++) b.tableau[c].push(down(cool.pop()));
+      b.tableau[c].push(up(warm.pop()));
+    }
+    warm.forEach((c) => b.stock.push(down(c)));
+    return b;
+  };
+  st = blockedState();
   s = await solLoad(st);
   solInvariants(s, 'prepared blocked game');
-  check(solDead(s.state) && cool.length === 0, 'test setup: the position is blocked');
-  let said = false;
-  for (let i = 0; i < 2 * (st.stock.length + 1) + 2 && !said; i++) {
-    const h = await solPressHint(s);
-    if (HINT_NONE.test(h.dom.msg || '') || !/hinted/.test(h.dom.stock.cls)) said = true;
-    else s = await solDraw(h);
-  }
-  const lastMsg = (await solSnap()).dom.msg;
-  await solBtn(/Suggerimento/).click();
-  const hintMsg = (await solSnap()).dom.msg;
+  check(solDead(s.state), 'test setup: the position is blocked');
+  let h = await solPressHint(s);
   await shot('solitario-blocked-hint');
-  bugCheck('BUG-3', said, 'Solitario: in a blocked game (no card can ever move) Suggerimento only repeats the advice to draw from the stock, pass after pass, and never says that the game is blocked',
-    { passesThroughStock: 2, hintText: hintMsg, textAfterDraw: lastMsg });
+  check(s.hintNow === null && HINT_NONE.test(h.dom.msg || '') && !/hinted/.test(h.dom.stock.cls), 'solitario: in a blocked game Suggerimento says that there are no more moves', { hint: s.hintNow, msg: h.dom.msg });
+  s = await solDraw(h);
+  h = await solPressHint(s);
+  check(HINT_NONE.test(h.dom.msg || ''), 'solitario: in a blocked game the hint stays "no more moves" after a card is turned', h.dom.msg);
+  // The same position, but one card at the bottom of the stock fits a column: the hint must say "turn a card"
+  // until that card comes up, then show it.
+  st = blockedState();
+  let swapped = false;
+  st.tableau.forEach((col) => col.forEach((x) => {
+    if (!swapped && !x.up && x.card.id === mk(2, 3).id) { const t = st.stock[0].card; st.stock[0].card = x.card; x.card = t; swapped = true; }
+  }));
+  s = await solLoad(st);
+  check(swapped && s.hintNow && s.hintNow.draw === true, 'solitario: the hint says to turn a card when a card deeper in the stock has a destination', s.hintNow);
+  let turns = 0;
+  while (s.hintNow && s.hintNow.draw && turns < 20) {
+    if (turns === 0) { h = await solPressHint(s); check(/girare|pescare/i.test(h.dom.msg || ''), 'solitario: text of the hint to turn a card', h.dom.msg); }
+    s = await solDraw(s);
+    turns += 1;
+  }
+  check(turns === st.stock.length && s.hintNow && s.hintNow.src && s.hintNow.src.type === 'waste', 'solitario: after the useful card is turned, the hint shows it', { turns, hint: s.hintNow });
+  if (s.hintNow && s.hintNow.src) s = await solDoMove(s, s.hintNow.src, s.hintNow.dst);
   stats.solitario.blocked += 1;
 
-  // --- 6. BUG-5 / BUG-6: double click.
+  // A position where the hint finds nothing, although two legal moves put a card on a final pile:
+  // 8 di Bastoni + 7 di Coppe go onto the 9 di Coppe, then the 9 di Denari goes to its final pile.
+  st = solEmptyState();
+  [5, 8, 8, 5].forEach((n, suit) => { for (let r = 1; r <= n; r++) st.foundation[suit].push(mk(suit, r)); });
+  st.tableau[0].push(up(mk(1, 10)), up(mk(3, 9)));
+  st.tableau[1].push(up(mk(3, 10)), up(mk(1, 9)), up(mk(3, 8)), up(mk(0, 7)));
+  st.tableau[3].push(up(mk(2, 10)), up(mk(0, 9)));
+  st.tableau[4].push(down(mk(0, 6)), down(mk(0, 10)), down(mk(3, 6)), up(mk(2, 9)), up(mk(0, 8)), up(mk(3, 7)));
+  s = await solLoad(st);
+  solInvariants(s, 'prepared position with a two-move way to a final pile');
+  h = await solPressHint(s);
+  const gaveUp = HINT_NONE.test(h.dom.msg || '');
+  s = await solDoMove(h, { type: 'tab', col: 1, idx: 2 }, { type: 'tab', col: 3 });
+  s = await solDoMove(s, { type: 'tab', col: 1, idx: 1 }, { type: 'found', suit: 1 });
+  check(!gaveUp, 'solitario: Suggerimento does not say "no more moves" while two legal moves put a card on a final pile', { hintText: h.dom.msg, movesThenPlayed: ['8 di Bastoni + 7 di Coppe onto 9 di Coppe', '9 di Denari to its final pile'], cardsInFinalPileDenari: s.state.foundation[1].length });
+
+  // --- 6. Double clicks: the second click is ignored.
   st = solEmptyState();
   st.tableau[0].push(up(mk(2, 3)));
   st.foundation[0].push(mk(0, 1));
@@ -1398,19 +1443,26 @@ async function solPreparedTests() {
   s = await solLoad(st);
   await page.locator('.solitario [data-role="waste"]').dblclick();
   after = await solSnap();
-  bugCheck('BUG-5', after.state.foundation[0].length === 2, 'Solitario: a double click on a card that can go to the final pile or to a column does nothing (the first click selects, the second removes the selection); a double click is the usual way to send a card to the final pile',
-    { cardsInFinalPileCoppe: after.state.foundation[0].length, moves: after.state.moves });
+  check(J(after.state) === J(s.state) && /selected/.test(after.dom.waste.cls) && /\bdest\b/.test(after.dom.found[0].cls) && /\bdest\b/.test(after.dom.cols[0].cls),
+    'solitario: a double click on a card with several destinations selects it (the second click does not remove the selection)', { waste: after.dom.waste.cls, moves: after.state.moves });
   st = solEmptyState();
   st.waste.push(up(mk(1, 1)), up(mk(0, 1)));
   restToStock(st);
   s = await solLoad(st);
   await page.locator('.solitario [data-role="waste"]').dblclick();
   after = await solSnap();
-  bugCheck('BUG-6', after.state.moves === 1, 'Solitario: a double click on the waste moves two cards (the second click plays the card that was below)',
-    { moves: after.state.moves, cardsInFinalPiles: after.state.foundation.map((p) => p.length) });
-  solInvariants(after, 'after double click');
+  check(after.state.moves === 1 && J(after.state.foundation.map((p) => p.length)) === '[1,0,0,0]', 'solitario: a double click on the waste moves one card only', { moves: after.state.moves, finalPiles: after.state.foundation.map((p) => p.length) });
+  solInvariants(after, 'after double click on the waste');
+  st = solEmptyState();
+  st.tableau[0].push(down(mk(1, 1)), up(mk(0, 1)));
+  restToStock(st);
+  s = await solLoad(st);
+  await page.locator('.solitario .col[data-col="0"] > .pcard').last().dblclick();
+  after = await solSnap();
+  check(after.state.moves === 1 && after.state.tableau[0].length === 1 && after.state.tableau[0][0].up, 'solitario: a double click on a column card moves one card only (the card turned over stays)', { moves: after.state.moves });
+  solInvariants(after, 'after double click on a column');
 
-  // --- 7. BUG-7: one click on a final pile sends its top card back to a column.
+  // --- 7. A card of a final pile: the first click only selects it, the second click on the column moves it.
   st = solEmptyState();
   st.foundation[0].push(mk(0, 1), mk(0, 2));
   st.tableau[0].push(up(mk(2, 3)));
@@ -1418,55 +1470,66 @@ async function solPreparedTests() {
   s = await solLoad(st);
   await page.locator('.solitario [data-role="found-0"]').click();
   after = await solSnap();
-  bugCheck('BUG-7', after.state.foundation[0].length === 2, 'Solitario: a single click on a final pile takes its top card back down to a column at once, with no selection step and no message',
-    { cardsInFinalPileCoppe: after.state.foundation[0].length, column0: after.state.tableau[0].map((x) => cardName(x.card)) });
+  check(J(after.state) === J(s.state) && /selected/.test(after.dom.found[0].cls) && /\bdest\b/.test(after.dom.cols[0].cls), 'solitario: one click on a final pile only selects its top card', { cardsInFinalPileCoppe: after.state.foundation[0].length });
+  await page.locator('.solitario [data-role="found-0"]').click();
+  after = await solSnap();
+  check(J(after.state) === J(s.state) && !/selected/.test(after.dom.found[0].cls), 'solitario: a second click on the final pile removes the selection');
+  s = await solDoMove(after, { type: 'found', suit: 0 }, { type: 'tab', col: 0 });
+  check(s.state.foundation[0].length === 1 && s.state.tableau[0].length === 2, 'solitario: a card of a final pile can be taken back to a column in two clicks');
+  await page.locator('.solitario [data-role="found-0"]').click();
+  after = await solSnap();
+  check(J(after.state) === J(s.state) && /non si può spostare/i.test(after.dom.msg || ''), 'solitario: a final-pile card with no column to go to is refused with a message', after.dom.msg);
 
-  // --- 8. BUG-2: a long column in the normal window: 6 face-down cards and a run from the Re to the Asso.
-  st = solEmptyState();
-  [2, 3, 4, 5, 6, 7].forEach((r) => st.tableau[6].push(down(mk(1, r))));
-  for (let r = 10; r >= 1; r--) st.tableau[6].push(up(mk(r % 2 === 0 ? 0 : 2, r)));
-  st.tableau[2] = [up(mk(3, 10)), up(mk(1, 9)), up(mk(3, 8))];
-  restToStock(st);
-  s = await solLoad(st);
-  solInvariants(s, 'prepared long column');
-  await shot('solitario-long-column');
+  // --- 8. Long columns: 6 face-down cards and a run from the Re to the Asso; 5 face-down and Re to 4.
   const colSteps = () => page.evaluate(() => Array.from(document.querySelectorAll('.solitario .col')).map((col) => {
     const kids = Array.from(col.children);
     return kids.slice(1).map((k, i) => ({ up: kids[i].dataset.card !== undefined, px: Math.round((k.getBoundingClientRect().top - kids[i].getBoundingClientRect().top) * 10) / 10 }));
   }));
-  const tagH = await page.evaluate(() => { const t = document.querySelector('.solitario .rank-tag'); return t ? Math.round(t.getBoundingClientRect().height + t.offsetTop) : 0; });
-  let steps = (await colSteps())[6];
-  const upSteps = steps.filter((x) => x.up).map((x) => x.px);
-  check(steps.every((x) => x.px > 0), 'solitario: cards of a column never go upward (window 1120 x 812)', steps);
-  bugCheck('BUG-2', Math.min.apply(null, upSteps) >= Math.max(14, tagH - 6), 'Solitario (window 1120 x 812): in a long column the covered face-up cards show a strip too thin to read their value',
-    { column: '6 face-down + Re to Asso', stripOfEveryCoveredFaceUpCardPx: upSteps[0], heightNeededToReadTheValueTagPx: tagH });
+  const longState = function () {
+    const l = solEmptyState();
+    [2, 3, 4, 5, 6, 7].forEach((r) => l.tableau[6].push(down(mk(1, r))));
+    for (let r = 10; r >= 1; r--) l.tableau[6].push(up(mk(r % 2 === 0 ? 0 : 2, r)));
+    [1, 9, 10].forEach((r) => l.tableau[5].push(down(mk(1, r))));
+    l.tableau[5].push(down(mk(3, 1)), down(mk(3, 2)));
+    for (let r = 10; r >= 4; r--) l.tableau[5].push(up(mk(r % 2 === 0 ? 3 : 0, r)));
+    l.tableau[2] = [up(mk(1, 8))];
+    return restToStock(l);
+  };
+  const layoutOk = async function (label) {
+    const snap = await solSnap();
+    const steps = await colSteps();
+    const ups = [].concat.apply([], steps).filter((x) => x.up).map((x) => x.px);
+    check(ups.length > 0 && Math.min.apply(null, ups) >= 23.5 && [].concat.apply([], steps).every((x) => x.px > 0), 'solitario: long columns keep a step of 24 px or more between face-up cards (' + label + ')', () => ({ min: Math.min.apply(null, ups), steps: steps[6].map((x) => x.px) }));
+    check(snap.dom.miss.length === 0, 'solitario: every covered face-up card of a long column can be clicked (' + label + ')', () => snap.dom.miss.slice(0, 3));
+    layoutChecks('solitario', snap.lay, label);
+    return { snap, steps };
+  };
+  s = await solLoad(longState());
+  solInvariants(s, 'prepared long columns');
+  await shot('solitario-long-column');
+  await layoutOk('window 1120 x 812');
+  // A covered card far down the long column is reached by a real click (the page may have to scroll).
+  s = await solDoMove(s, { type: 'tab', col: 6, idx: 9 }, { type: 'tab', col: 2 });
+  check(s.state.tableau[2].length === 8 && s.state.tableau[6].length === 9, 'solitario: a run taken from the middle of a long column moves as a whole');
 
-  // --- 9. BUG-1: the same game in a lower window (1120 x 640): an ordinary position after a few moves.
-  st = solEmptyState();
-  const pool = [];
-  for (let id = 39; id >= 0; id--) pool.push(byId(id));
-  const takeCard = (suit, rank) => pool.splice(pool.findIndex((c) => c.suit === suit && c.rank === rank), 1)[0];
-  // Column 7: 6 face-down, then 7 di Spade and 6 di Coppe. Column 6: 5 face-down, 8 di Bastoni, 7 di Denari, 6 di Spade.
-  const c7 = [takeCard(2, 7), takeCard(0, 6)];
-  const c6 = [takeCard(3, 8), takeCard(1, 7), takeCard(2, 6)];
-  for (let c = 0; c < 7; c++) {
-    const downs = c === 6 ? 6 : c === 5 ? 5 : c;
-    for (let i = 0; i < downs; i++) st.tableau[c].push(down(pool.pop()));
-    if (c === 6) c7.forEach((x) => st.tableau[c].push(up(x)));
-    else if (c === 5) c6.forEach((x) => st.tableau[c].push(up(x)));
-    else st.tableau[c].push(up(pool.pop()));
+  // --- 9. Lower and smaller windows, and a new layout when the window is resized.
+  for (const size of [[1120, 640], [700, 600], [480, 560]]) {
+    await page.setViewportSize({ width: size[0], height: size[1] });
+    s = await solLoad(longState());
+    if (size[1] === 640) await shot('solitario-low-window');
+    await layoutOk('window ' + size[0] + ' x ' + size[1]);
   }
-  pool.forEach((c) => st.stock.push(down(c)));
   await page.setViewportSize({ width: 1120, height: 640 });
-  s = await solLoad(st);
-  await shot('solitario-low-window');
-  steps = await colSteps();
-  const up7 = steps[6].filter((x) => x.up).map((x) => x.px);
-  const up6 = steps[5].filter((x) => x.up).map((x) => x.px);
-  bugCheck('BUG-1', Math.min.apply(null, up7.concat(up6)) >= 12, 'Solitario in a window lower than about 740 px: face-up cards of the right-hand columns are laid exactly on top of each other (the step between cards is zero or negative), so covered cards cannot be seen or clicked',
-    { window: '1120 x 640', column7StepPx: up7, column6StepPx: up6, clicksThatMissTheirCard: s.dom.miss.slice(0, 2) });
+  s = await solLoad(longState());
+  const low = await colSteps();
+  const eventsBefore = await page.evaluate(() => window.__e2eResizes);
   await page.setViewportSize({ width: 1120, height: 812 });
-  s = await solLoad(st);
+  await tick(200);
+  const resizeEvents = (await page.evaluate(() => window.__e2eResizes)) - eventsBefore;
+  const resized = await colSteps();
+  s = await solLoad(longState());
+  const freshLayout = await colSteps();
+  check(J(resized) === J(freshLayout) && J(resized) !== J(low), 'solitario: the columns are laid out again when the window is resized', () => ({ resizeEventsSeenByThePage: resizeEvents, low: low[5].map((x) => x.px), resized: resized[5].map((x) => x.px), fresh: freshLayout[5].map((x) => x.px) }));
   solInvariants(s, 'back to the normal window');
   noErrors('solitario prepared');
 }
@@ -1511,7 +1574,9 @@ async function escapeTests() {
   tr.shotChoose = true;
   const base = stats.scopa.humanPlays;
   await scopaLoop(tr, () => stats.scopa.humanPlays >= base + 2);
-  await leave('scopa, after two plays', false);
+  // Play on to the end of the round and leave during the pause before the points table.
+  await scopaLoop(tr, (t, now) => now.ended && !now.overlay);
+  await leave('scopa, pause before the points table', false);
 
   // Briscola: leave while the opponent thinks and while the finished trick is shown.
   await openFromMenu('Briscola');
@@ -1654,14 +1719,6 @@ async function escapeTests() {
     console.log('\nFAILED CHECKS (' + failures.size + '):');
     failures.forEach((f, key) => console.log(' - ' + key + ' (x' + f.count + ')' + (f.first !== undefined ? ' :: ' + J(f.first) : '')));
   }
-  const present = Array.from(bugs.entries()).filter((e) => e[1].present);
-  const gone = Array.from(bugs.entries()).filter((e) => !e[1].present);
-  if (present.length) {
-    console.log('\nKNOWN BUGS STILL PRESENT (' + present.length + '):');
-    present.forEach((e) => console.log(' - ' + e[0] + ': ' + e[1].title + (e[1].detail ? ' :: ' + J(e[1].detail) : '')));
-    if (!KNOWN_OK) bad += present.length;
-  }
-  if (gone.length) console.log('\nknown-bug checks that pass: ' + gone.map((e) => e[0]).join(', '));
   if (pageErrors.length) console.log('\nPAGE ERRORS:\n' + pageErrors.slice(0, 20).join('\n'));
   console.log(bad ? '\nRESULT: FAIL (' + bad + ')' : '\nRESULT: OK');
   process.exit(bad ? 1 : 0);
