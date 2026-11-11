@@ -126,6 +126,46 @@
     ctx.fillText(str, x, y);
   }
 
+  // Text in the pixel font of the arcade games.
+  function pixelText(ctx, str, x, y, size, color, align) {
+    ctx.font = size + 'px "Press Start", "Courier New", monospace';
+    ctx.fillStyle = color || '#fff';
+    ctx.textAlign = align || 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(str, x, y);
+  }
+
+  // Draws a pixel sprite. rows = strings, 'X' is a filled pixel. (x, y) is the top left.
+  function sprite(ctx, rows, x, y, px, color) {
+    ctx.fillStyle = color;
+    for (let r = 0; r < rows.length; r++) {
+      const row = rows[r];
+      for (let c = 0; c < row.length; c++) {
+        if (row[c] === 'X') ctx.fillRect(x + c * px, y + r * px, px, px);
+      }
+    }
+  }
+
+  // Small still picture of a game for the menu. paint(ctx) draws in w x h logical pixels.
+  function thumb(el, w, h, paint) {
+    const canvas = document.createElement('canvas');
+    canvas.width = w * 2;
+    canvas.height = h * 2;
+    canvas.style.objectFit = 'cover';
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(2, 0, 0, 2, 0, 0);
+    el.appendChild(canvas);
+    const draw = function () { paint(ctx); };
+    draw();
+    // Draw again when the pixel font has arrived.
+    if (document.fonts && document.fonts.load) document.fonts.load('10px "Press Start"').then(draw, function () {});
+  }
+
+  // One line under the canvas that tells the keys.
+  function help(container, text) {
+    container.parentNode.appendChild(U.el('p', { class: 'arcade-help', text: text }));
+  }
+
   // Start / game-over card on top of the game stage. Enter or a click starts.
   function overlay(container, title, body, buttonText, onStart) {
     let box = null;
@@ -151,7 +191,7 @@
         U.el('h2', { text: title }),
         U.el('p', { text: body }),
         U.el('button', { class: 'btn big', text: buttonText, onclick: go }),
-        U.el('p', { class: 'hint', text: 'Oppure premi Invio ⏎' })));
+        U.el('p', { class: 'hint', text: 'Oppure premi il tasto Invio' })));
     container.appendChild(box);
     window.addEventListener('keydown', onKey);
     return box;
@@ -166,6 +206,10 @@
     startLoop: startLoop,
     emoji: emoji,
     text: text,
+    pixelText: pixelText,
+    sprite: sprite,
+    thumb: thumb,
+    help: help,
     overlay: overlay,
   };
 });

@@ -1,4 +1,4 @@
-// Snake Procione. The raccoon head eats fish. Walls and your own body end the game.
+// Snake, in the look of the old mobile phones. The border and your own body end the game.
 (function (name, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -90,12 +90,69 @@
   }
 
   // ---------- Browser interface ----------
+  // The look of the Snake on old mobile phones: dark pixels on a green screen.
+  const CELL = 30;
+  const HUD = 46;
+  const FRAME = 10;
+  const VIEW_W = COLS * CELL + FRAME * 2;
+  const VIEW_H = ROWS * CELL + HUD + FRAME;
+  const LCD = '#c7f0d8';
+  const LCD_GRID = '#b9e3ca';
+  const INK = '#33402f';
+
+  // One cell made of 3 x 3 screen pixels with thin gaps.
+  function lcdCell(g, x, y, pattern) {
+    const p = CELL / 3;
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 3; c++) {
+        if (pattern[r][c] === 'X') g.fillRect(x + c * p + 1, y + r * p + 1, p - 2, p - 2);
+      }
+    }
+  }
+  const FULL = ['XXX', 'XXX', 'XXX'];
+  const FOOD = ['.X.', 'X.X', '.X.'];
+  const HEAD = { right: ['XX.', 'XXX', 'XX.'], left: ['.XX', 'XXX', '.XX'], up: ['.X.', 'XXX', 'XXX'], down: ['XXX', 'XXX', '.X.'] };
+
+  function paint(g, state, hi) {
+    g.fillStyle = LCD;
+    g.fillRect(0, 0, VIEW_W, VIEW_H);
+    // Faint grid of the screen pixels.
+    g.fillStyle = LCD_GRID;
+    const p = CELL / 3;
+    for (let x = FRAME; x <= VIEW_W - FRAME; x += p) g.fillRect(x - 0.5, HUD, 1, ROWS * CELL);
+    for (let y = HUD; y <= HUD + ROWS * CELL; y += p) g.fillRect(FRAME, y - 0.5, COLS * CELL, 1);
+    g.fillStyle = INK;
+    // Border of the field.
+    g.fillRect(FRAME - 5, HUD - 5, COLS * CELL + 10, 3);
+    g.fillRect(FRAME - 5, HUD + ROWS * CELL + 2, COLS * CELL + 10, 3);
+    g.fillRect(FRAME - 5, HUD - 5, 3, ROWS * CELL + 10);
+    g.fillRect(FRAME + COLS * CELL + 2, HUD - 5, 3, ROWS * CELL + 10);
+    if (state.food) lcdCell(g, FRAME + state.food.x * CELL, HUD + state.food.y * CELL, FOOD);
+    state.snake.forEach(function (s, i) {
+      lcdCell(g, FRAME + s.x * CELL, HUD + s.y * CELL, i === 0 ? HEAD[state.dir] : FULL);
+    });
+    AR.pixelText(g, String(state.score).padStart(4, '0'), FRAME, HUD / 2 - 2, 18, INK, 'left');
+    AR.pixelText(g, 'RECORD ' + String(Math.max(hi, state.score)).padStart(4, '0'), VIEW_W - FRAME, HUD / 2 - 2, 12, INK, 'right');
+  }
+
+  function thumb(el) {
+    const s = newGame(5);
+    s.snake = [];
+    [[9, 6], [8, 6], [7, 6], [6, 6], [5, 6], [5, 7], [5, 8], [6, 8], [7, 8], [8, 8]].forEach(function (c) { s.snake.push({ x: c[0], y: c[1] }); });
+    s.food = { x: 12, y: 6 };
+    s.score = 70;
+    AR.thumb(el, 480, 350, function (g) {
+      g.save();
+      g.translate(-60, -60);
+      paint(g, s, 0);
+      g.restore();
+    });
+  }
+
   function mount(container) {
-    const CELL = 30;
-    const HUD = 34;
     const wrap = U.el('div', { class: 'arcade-stage' });
     container.appendChild(wrap);
-    const view = AR.createCanvas(wrap, COLS * CELL, ROWS * CELL + HUD, 'snake');
+    const view = AR.createCanvas(wrap, VIEW_W, VIEW_H, 'snake');
     const g = view.ctx;
     let hi = U.store.get('hi.snake', 0);
     let state = newGame(1);
@@ -103,32 +160,7 @@
     let acc = 0;
 
     function draw() {
-      g.fillStyle = '#0f0d2b';
-      g.fillRect(0, 0, view.w, view.h);
-      for (let y = 0; y < ROWS; y++) {
-        for (let x = 0; x < COLS; x++) {
-          g.fillStyle = (x + y) % 2 ? '#1d3d27' : '#214730';
-          g.fillRect(x * CELL, HUD + y * CELL, CELL, CELL);
-        }
-      }
-      if (state.food) AR.emoji(g, '🐟', state.food.x * CELL + CELL / 2, HUD + state.food.y * CELL + CELL / 2 + 1, CELL - 6);
-      for (let i = state.snake.length - 1; i >= 0; i--) {
-        const p = state.snake[i];
-        const cx = p.x * CELL + CELL / 2;
-        const cy = HUD + p.y * CELL + CELL / 2;
-        if (i === 0) {
-          AR.emoji(g, state.alive || state.won ? '🦝' : '😵', cx, cy + 1, CELL);
-        } else {
-          // The tail has the grey and black rings of a raccoon tail.
-          g.fillStyle = i % 2 ? '#9ca3af' : '#374151';
-          g.beginPath();
-          g.arc(cx, cy, CELL / 2 - 2, 0, Math.PI * 2);
-          g.fill();
-        }
-      }
-      AR.text(g, 'Punti ' + state.score, 10, HUD / 2, 15, '#fef3c7', 'left');
-      AR.text(g, 'Pesci ' + state.eaten, view.w / 2, HUD / 2, 15, '#fef3c7');
-      AR.text(g, 'Record ' + Math.max(hi, state.score), view.w - 10, HUD / 2, 15, '#fef3c7', 'right');
+      paint(g, state, hi);
     }
 
     function frame(dt) {
@@ -152,9 +184,9 @@
         U.store.set('hi.snake', hi);
       }
       AR.overlay(wrap,
-        state.won ? 'Hai riempito tutto il campo! 🦝🏆' : 'Ahi! 🦝',
-        'Punti: ' + state.score + ' · Pesci: ' + state.eaten + ' · Record: ' + hi,
-        'Gioca ancora', newRun);
+        state.won ? 'CAMPO PIENO!' : 'PARTITA FINITA',
+        'Punti: ' + state.score + '. Bocconi: ' + state.eaten + '. Record: ' + hi + '.',
+        'GIOCA ANCORA', newRun);
     }
 
     function newRun() {
@@ -168,7 +200,8 @@
       if (down && KEY_DIR[k] && started) turn(state, KEY_DIR[k]);
     });
     const loop = AR.startLoop(frame, draw);
-    AR.overlay(wrap, 'Snake Procione 🦝', 'Usa le frecce per girare. Mangia i pesci: la coda si allunga. Non toccare il bordo e non toccare la coda.', 'Inizia', newRun);
+    AR.help(wrap, 'Usa le quattro frecce per girare.');
+    AR.overlay(wrap, 'SNAKE', 'Mangia i bocconi: il serpente si allunga. Non toccare il bordo e non toccare la coda.', 'INIZIA', newRun);
     return {
       destroy: function () {
         loop.stop();
@@ -182,8 +215,9 @@
   }
 
   return {
-    meta: { id: 'snake', title: 'Snake', icon: '🐍', desc: 'Il procione mangia i pesci e la coda si allunga.' },
+    meta: { id: 'snake', title: 'Snake', desc: 'Il serpente dei vecchi telefonini.' },
     mount: mount,
+    thumb: thumb,
     newGame: newGame,
     stepSnake: stepSnake,
     turn: turn,

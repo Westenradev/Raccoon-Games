@@ -1,4 +1,4 @@
-// Scopa for 2 players: you against the Chihuahua. First to 11 points wins the match.
+// Scopa for 2 players: you against the computer. First to 11 points wins the match.
 // Rules: capture is mandatory. A single card of the same value must be taken before a sum.
 (function (name, factory) {
   const api = factory();
@@ -232,7 +232,7 @@
     let choosing = null; // { cardId, opts } when the player must pick one of several captures
     let preview = null; // { card, takeIds } while the CPU shows its move
     let note = '';
-    const root = U.el('div', { class: 'scopa game-panel' });
+    const root = U.el('div', { class: 'scopa game-panel tabletop' });
     container.appendChild(root);
 
     function later(fn, ms) {
@@ -244,9 +244,9 @@
     }
 
     function describe(last) {
-      const who = last.player === HUMAN ? 'Hai' : 'Il Chihuahua ha';
+      const who = last.player === HUMAN ? 'Hai' : 'L\'avversario ha';
       if (!last.taken.length) return who + ' posato ' + D.cardName(last.card) + '.';
-      return who + ' preso ' + names(last.taken) + ' con ' + D.cardName(last.card) + '.' + (last.scopa ? ' SCOPA! 🧹' : '');
+      return who + ' preso ' + names(last.taken) + ' con ' + D.cardName(last.card) + '.' + (last.scopa ? ' Scopa!' : '');
     }
 
     function startNewRound() {
@@ -254,7 +254,7 @@
       choosing = null;
       preview = null;
       busy = false;
-      note = state.turn === HUMAN ? 'Tocca a te. Scegli una carta dalla tua mano.' : 'Inizia il Chihuahua.';
+      note = state.turn === HUMAN ? 'Tocca a te. Scegli una carta dalla tua mano.' : 'Inizia l\'avversario.';
       render();
       nextTurn();
     }
@@ -268,7 +268,7 @@
         const c = cpuChoose(state, rnd);
         const card = state.hands[CPU].find(function (x) { return x.id === c.cardId; });
         preview = { card: card, takeIds: c.takeIds };
-        note = 'Il Chihuahua gioca ' + D.cardName(card) + (c.takeIds.length ? ' e prende…' : '.');
+        note = 'L\'avversario gioca ' + D.cardName(card) + (c.takeIds.length ? ' e prende…' : '.');
         if (A) A.sfx.place();
         render();
         later(function () {
@@ -315,9 +315,9 @@
         return U.el('tr', null, U.el('td', { text: label }), U.el('td', { text: String(a) }), U.el('td', { text: String(b) }));
       };
       const box = U.el('div', { class: 'card-box' },
-        U.el('h2', { text: over ? (match.winner === HUMAN ? 'Hai vinto la partita! 🦝🏆' : 'Il Chihuahua vince la partita 🐕') : 'Fine della mano ' + match.round }),
+        U.el('h2', { text: over ? (match.winner === HUMAN ? 'Hai vinto la partita!' : 'Ha vinto l\'avversario') : 'Fine della mano ' + match.round }),
         U.el('table', { class: 'score-table' },
-          U.el('tr', null, U.el('th', { text: '' }), U.el('th', { text: 'Tu' }), U.el('th', { text: 'Chihuahua' })),
+          U.el('tr', null, U.el('th', { text: '' }), U.el('th', { text: 'Tu' }), U.el('th', { text: 'Avversario' })),
           line('Carte', r.count[0], r.count[1]),
           line('Denari', r.denari[0], r.denari[1]),
           line('Settebello', r.settebello[0] ? '✔' : '', r.settebello[1] ? '✔' : ''),
@@ -337,22 +337,32 @@
       root.appendChild(U.el('div', { class: 'overlay' }, box));
     }
 
+    function pileEl(who) {
+      const n = state.captured[who].length;
+      const stack = U.el('div', { class: 'stack' + (n ? '' : ' none') });
+      if (n) stack.appendChild(D.cardEl(null, { hidden: true }));
+      return U.el('div', { class: 'pile' }, stack,
+        U.el('div', { text: n + (n === 1 ? ' carta presa' : ' carte prese') }),
+        U.el('div', { class: 'scope', text: 'Scope: ' + state.scope[who] }));
+    }
+
     function render() {
       if (!alive) return;
       root.innerHTML = '';
       const myTurn = !busy && !state.ended && state.turn === HUMAN;
       root.appendChild(U.el('div', { class: 'pill-row' },
-        U.el('div', { class: 'pill', text: 'Tu ' + match.scores[0] + ' · Chihuahua ' + match.scores[1] }),
-        U.el('div', { class: 'pill', text: 'Si vince a ' + WIN_SCORE + ' · Mano ' + match.round }),
+        U.el('div', { class: 'pill', text: 'Tu ' + match.scores[0] + ' — Avversario ' + match.scores[1] }),
+        U.el('div', { class: 'pill', text: 'Si vince a ' + WIN_SCORE }),
+        U.el('div', { class: 'pill', text: 'Mano ' + match.round }),
         U.el('div', { class: 'pill', text: 'Mazzo: ' + state.deck.length })));
 
-      const cpuRow = U.el('div', { class: 'hand cpu' }, U.el('span', { class: 'seat', text: '🐕 Chihuahua' }));
+      const cpuHand = U.el('div', { class: 'hand cpu' });
       state.hands[CPU].forEach(function (c) {
         if (preview && preview.card.id === c.id) return;
-        cpuRow.appendChild(D.cardEl(null, { hidden: true, small: true }));
+        cpuHand.appendChild(D.cardEl(null, { hidden: true, small: true }));
       });
-      cpuRow.appendChild(U.el('span', { class: 'seat', text: 'Prese: ' + state.captured[CPU].length + ' · Scope: ' + state.scope[CPU] }));
-      root.appendChild(cpuRow);
+      root.appendChild(U.el('div', { class: 'seat-row' },
+        U.el('div', { class: 'seat-name right', text: 'Avversario' }), cpuHand, pileEl(CPU)));
 
       const tableRow = U.el('div', { class: 'felt' });
       const marked = preview ? preview.takeIds : (choosing ? [].concat.apply([], choosing.opts) : []);
@@ -364,7 +374,7 @@
         played.classList.add('played');
         tableRow.appendChild(played);
       }
-      if (!state.table.length && !preview) tableRow.appendChild(U.el('span', { class: 'felt-note', text: 'Tavolo vuoto' }));
+      if (!state.table.length && !preview) tableRow.appendChild(U.el('span', { class: 'felt-note', text: 'Il tavolo è vuoto' }));
       root.appendChild(tableRow);
 
       root.appendChild(U.el('div', { class: 'msg', text: note }));
@@ -387,8 +397,9 @@
           onclick: function () { clickHand(c); },
         }));
       });
-      root.appendChild(handRow);
-      root.appendChild(U.el('div', { class: 'hint', text: '🦝 Tu · Prese: ' + state.captured[HUMAN].length + ' · Scope: ' + state.scope[HUMAN] + ' · Un clic gioca la carta. La presa è obbligatoria.' }));
+      root.appendChild(U.el('div', { class: 'seat-row' },
+        U.el('div', { class: 'seat-name right', text: 'Tu' }), handRow, pileEl(HUMAN)));
+      root.appendChild(U.el('div', { class: 'hint', text: 'Tocca una carta per giocarla. Se puoi prendere, devi prendere.' }));
     }
 
     startNewRound();
@@ -407,7 +418,7 @@
   }
 
   return {
-    meta: { id: 'scopa', title: 'Scopa', icon: '🧹', desc: 'Scopa contro il Chihuahua. Vince chi arriva a 11 punti.' },
+    meta: { id: 'scopa', title: 'Scopa', desc: 'Contro il computer. Vince chi arriva a 11 punti.' },
     mount: mount,
     captureOptions: captureOptions,
     newMatch: newMatch,

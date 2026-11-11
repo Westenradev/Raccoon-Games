@@ -1,4 +1,5 @@
-// Raccoon Defender (Space Invaders style). The raccoon shoots cats, mice and chihuahuas.
+// Raccoon Defender (Space Invaders style): white pixel invaders on black, a green cannon
+// and green shelters, in the look of the 1978 arcade cabinet.
 (function (name, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -21,12 +22,8 @@
   const PLAYER_Y = H - 46;
   const SHIELD_Y = H - 150;
   const SHIELD_CELL = 8;
-  // Row type: 0 = cat (top), 1 = mouse, 2 = chihuahua (bottom).
-  const TYPES = [
-    { emoji: '🐱', points: 30 },
-    { emoji: '🐭', points: 20 },
-    { emoji: '🐕', points: 10 },
-  ];
+  // Row type: 0 = small invader (top row), 1 = medium, 2 = large (bottom rows).
+  const TYPES = [{ points: 30 }, { points: 20 }, { points: 10 }];
 
   function rowType(row) {
     if (row === 0) return 0;
@@ -69,7 +66,7 @@
       eBullets: [],
       invaders: makeInvaders(),
       fx: 40,
-      fy: 70,
+      fy: 84,
       dir: 1,
       stepAcc: 0,
       fireAcc: 0,
@@ -81,6 +78,8 @@
       over: false,
       cooldown: 0,
       events: [],
+      pops: [], // places where an invader was just hit, for the burst on screen
+      steps: 0, // formation steps so far: the invaders change pose at every step
     };
   }
 
@@ -89,7 +88,7 @@
     state.score += 100;
     state.invaders = makeInvaders();
     state.fx = 40;
-    state.fy = 70;
+    state.fy = 84;
     state.dir = 1;
     state.pBullets = [];
     state.eBullets = [];
@@ -151,6 +150,7 @@
         const p = invaderPos(state, inv);
         if (b.x > p.x - INV_W / 2 && b.x < p.x + INV_W / 2 && b.y > p.y - INV_H / 2 && b.y < p.y + INV_H / 2) {
           inv.alive = false;
+          state.pops.push({ x: p.x, y: p.y, life: 0.22 });
           state.score += TYPES[inv.type].points;
           state.events.push('kill');
           return false;
@@ -223,6 +223,7 @@
     } else {
       state.fx += state.dir * 12;
     }
+    state.steps += 1;
     state.events.push('step');
     // Invaders reaching the player row end the game.
     const lowestY = Math.max.apply(null, alive.map((i) => state.fy + i.row * SPACING_Y));
@@ -233,6 +234,89 @@
   }
 
   // ---------- Browser interface ----------
+  const WHITE = '#f4f4f4';
+  const GREEN = '#28f040';
+  const RED = '#ff4a30';
+  // Two poses for each invader. 'X' is a lit pixel.
+  const SPRITES = [
+    [['...XX...', '..XXXX..', '.XXXXXX.', 'XX.XX.XX', 'XXXXXXXX', '..X..X..', '.X.XX.X.', 'X.X..X.X'],
+      ['...XX...', '..XXXX..', '.XXXXXX.', 'XX.XX.XX', 'XXXXXXXX', '.X.XX.X.', 'X......X', '.X....X.']],
+    [['..X.....X..', '...X...X...', '..XXXXXXX..', '.XX.XXX.XX.', 'XXXXXXXXXXX', 'X.XXXXXXX.X', 'X.X.....X.X', '...XX.XX...'],
+      ['..X.....X..', 'X..X...X..X', 'X.XXXXXXX.X', 'XXX.XXX.XXX', 'XXXXXXXXXXX', '.XXXXXXXXX.', '..X.....X..', '.X.......X.']],
+    [['....XXXX....', '.XXXXXXXXXX.', 'XXXXXXXXXXXX', 'XXX..XX..XXX', 'XXXXXXXXXXXX', '...XX..XX...', '..XX.XX.XX..', 'XX........XX'],
+      ['....XXXX....', '.XXXXXXXXXX.', 'XXXXXXXXXXXX', 'XXX..XX..XXX', 'XXXXXXXXXXXX', '..XXX..XXX..', '.XX..XX..XX.', '..XX....XX..']],
+  ];
+  const CANNON = ['......X......', '.....XXX.....', '.....XXX.....', '.XXXXXXXXXXX.', 'XXXXXXXXXXXXX', 'XXXXXXXXXXXXX', 'XXXXXXXXXXXXX'];
+  const BURST = ['X..X...X..X', '.X..X.X..X.', '...........', 'XX.......XX', '...........', '.X..X.X..X.', 'X..X...X..X'];
+  const PX = 2.5;
+  const HUD = 44;
+
+  function paint(g, state, hi) {
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, W, H);
+    const pose = state.steps % 2;
+    state.invaders.forEach(function (inv) {
+      if (!inv.alive) return;
+      const p = invaderPos(state, inv);
+      const rows = SPRITES[inv.type][pose];
+      AR.sprite(g, rows, Math.round(p.x - (rows[0].length * PX) / 2), Math.round(p.y - (rows.length * PX) / 2), PX, WHITE);
+    });
+    state.pops.forEach(function (b) {
+      AR.sprite(g, BURST, b.x - (11 * PX) / 2, b.y - (7 * PX) / 2, PX, WHITE);
+    });
+    g.fillStyle = GREEN;
+    state.shields.forEach(function (block) {
+      block.forEach(function (c) {
+        if (c.alive) g.fillRect(c.x, c.y, SHIELD_CELL, SHIELD_CELL);
+      });
+    });
+    if (!(state.invuln > 0 && Math.floor(state.invuln * 10) % 2 === 0) && !state.over) {
+      AR.sprite(g, CANNON, Math.round(state.px - (13 * 3) / 2), PLAYER_Y - 10, 3, GREEN);
+    }
+    g.fillStyle = WHITE;
+    state.pBullets.forEach(function (b) { g.fillRect(b.x - 1.5, b.y, 3, 12); });
+    // Enemy shots are small zigzag bolts.
+    state.eBullets.forEach(function (b) {
+      const wob = Math.floor(b.y / 8) % 2 ? 2 : -2;
+      g.fillRect(b.x - 1.5 + wob, b.y - 8, 3, 5);
+      g.fillRect(b.x - 1.5 - wob, b.y - 3, 3, 5);
+      g.fillRect(b.x - 1.5 + wob, b.y + 2, 3, 5);
+    });
+    // Ground line and spare cannons.
+    g.fillStyle = GREEN;
+    g.fillRect(0, H - 24, W, 2);
+    for (let i = 0; i < state.lives - 1; i++) AR.sprite(g, CANNON, 12 + i * 34, H - 19, 2, GREEN);
+    AR.pixelText(g, 'ONDATA ' + state.wave, W - 10, H - 11, 10, GREEN, 'right');
+    // Score bar.
+    AR.pixelText(g, 'PUNTI', 12, 14, 10, WHITE, 'left');
+    AR.pixelText(g, String(state.score).padStart(5, '0'), 12, 32, 12, WHITE, 'left');
+    AR.pixelText(g, 'RECORD', W - 12, 14, 10, RED, 'right');
+    AR.pixelText(g, String(Math.max(hi, state.score)).padStart(5, '0'), W - 12, 32, 12, RED, 'right');
+  }
+
+  function thumb(el) {
+    const s = newGame(3);
+    s.fx = 70;
+    s.fy = 60;
+    [4, 13, 22, 31, 40, 41, 38].forEach(function (i) { s.invaders[i].alive = false; });
+    s.px = 250;
+    s.pBullets = [{ x: 250, y: 300 }];
+    s.eBullets = [{ x: 150, y: 250 }];
+    AR.thumb(el, W, 350, function (g) {
+      g.save();
+      g.translate(0, -40);
+      paint(g, s, 0);
+      // Bring the cannon and shelters up into the picture.
+      g.translate(0, -210);
+      g.fillStyle = '#000';
+      g.fillRect(0, H - 170, W, 170);
+      g.fillStyle = GREEN;
+      s.shields.forEach(function (block) { block.forEach(function (c) { g.fillRect(c.x, c.y, SHIELD_CELL, SHIELD_CELL); }); });
+      AR.sprite(g, CANNON, s.px - 19, PLAYER_Y - 10, 3, GREEN);
+      g.restore();
+    });
+  }
+
   function mount(container) {
     const wrap = U.el('div', { class: 'arcade-stage' });
     container.appendChild(wrap);
@@ -241,45 +325,15 @@
     let hi = U.store.get('hi.invaders', 0);
     let state = newGame(1);
     let started = false;
-    const stars = [];
-    for (let i = 0; i < 60; i++) stars.push({ x: (i * 97) % W, y: (i * 151) % H, s: 1 + (i % 3) * 0.5 });
 
     function draw() {
-      g.fillStyle = '#0b1026';
-      g.fillRect(0, 0, W, H);
-      g.fillStyle = 'rgba(255,255,255,0.55)';
-      stars.forEach(function (s) { g.fillRect(s.x, s.y, s.s, s.s); });
-      // The city to defend.
-      AR.emoji(g, '🏠', 40, H - 14, 18);
-      AR.emoji(g, '🌳', W / 2, H - 14, 18);
-      AR.emoji(g, '🏠', W - 40, H - 14, 18);
-      g.fillStyle = '#84cc16';
-      state.shields.forEach(function (block) {
-        block.forEach(function (c) {
-          if (c.alive) g.fillRect(c.x, c.y, SHIELD_CELL - 1, SHIELD_CELL - 1);
-        });
-      });
-      state.invaders.forEach(function (inv) {
-        if (!inv.alive) return;
-        const p = invaderPos(state, inv);
-        AR.emoji(g, TYPES[inv.type].emoji, p.x, p.y, 25);
-      });
-      if (!(state.invuln > 0 && Math.floor(state.invuln * 10) % 2 === 0) && !state.over) {
-        AR.emoji(g, '🦝', state.px, PLAYER_Y, 34);
-      }
-      g.fillStyle = '#facc15';
-      state.pBullets.forEach(function (b) { g.fillRect(b.x - 2, b.y, 4, 12); });
-      state.eBullets.forEach(function (b) { AR.emoji(g, '🦴', b.x, b.y, 14); });
-      g.fillStyle = '#0f0d2b';
-      g.fillRect(0, 0, W, 30);
-      AR.text(g, 'Punti ' + state.score, 8, 15, 14, '#fef3c7', 'left');
-      AR.text(g, 'Ondata ' + state.wave + ' · Record ' + Math.max(hi, state.score), W / 2, 15, 14, '#fef3c7');
-      AR.text(g, 'Vite', W - 76, 15, 14, '#fef3c7', 'right');
-      for (let i = 0; i < state.lives; i++) AR.emoji(g, '🦝', W - 60 + i * 22, 16, 16);
+      paint(g, state, hi);
     }
 
     // Called by the loop. Uses the game logic function update(state, dt, input).
     function frame(dt) {
+      state.pops.forEach(function (b) { b.life -= dt; });
+      state.pops = state.pops.filter(function (b) { return b.life > 0; });
       if (!started || state.over) return;
       update(state, dt, AR.dirInput());
       state.events.forEach(function (e) {
@@ -288,6 +342,7 @@
         if (e === 'kill') A.sfx.pop();
         if (e === 'hit') A.sfx.hit();
         if (e === 'wave') A.sfx.win();
+        if (e === 'step') A.sfx.tick();
       });
       if (state.over) gameOver();
     }
@@ -299,7 +354,7 @@
         U.store.set('hi.invaders', hi);
       }
       if (A) A.sfx.lose();
-      AR.overlay(wrap, 'La città è invasa! 🐱', 'Punti: ' + state.score + ' · Ondata: ' + state.wave + ' · Record: ' + hi, 'Gioca ancora', newRun);
+      AR.overlay(wrap, 'PARTITA FINITA', 'Punti: ' + state.score + '. Ondata: ' + state.wave + '. Record: ' + hi + '.', 'GIOCA ANCORA', newRun);
     }
 
     function newRun() {
@@ -309,7 +364,8 @@
 
     const unbind = AR.bindKeys(function () {});
     const loop = AR.startLoop(frame, draw);
-    AR.overlay(wrap, 'Raccoon Defender 🦝', 'Frecce ← → per muoverti. Barra spaziatrice per sparare. Ferma gatti, topi e chihuahua prima che arrivino in città.', 'Inizia', newRun);
+    AR.help(wrap, 'Frecce sinistra e destra: muovi il cannone. Spazio: spara.');
+    AR.overlay(wrap, 'RACCOON DEFENDER', 'Gli invasori scendono. Colpiscili tutti prima che arrivino a terra. I ripari verdi ti proteggono.', 'INIZIA', newRun);
     return {
       destroy: function () {
         loop.stop();
@@ -323,8 +379,9 @@
   }
 
   return {
-    meta: { id: 'invaders', title: 'Raccoon Defender', icon: '👾', desc: 'Space Invaders con il procione difensore.' },
+    meta: { id: 'invaders', title: 'Raccoon Defender', desc: 'Ferma gli invasori dello spazio.' },
     mount: mount,
+    thumb: thumb,
     newGame: newGame,
     update: update,
     W: W,

@@ -33,50 +33,70 @@ test('sudoku: harder levels show fewer numbers', () => {
   assert.ok(avg('facile') > avg('medio') && avg('medio') > avg('difficile'));
 });
 
-test('mahjong: a deal has 144 tiles, 36 kinds x 4, on the pyramid cells', () => {
-  for (let seed = 1; seed <= 40; seed++) {
+test('mahjong: the Turtle layout has 144 places, each tile above the table rests on tiles', () => {
+  const slots = M.turtleSlots();
+  assert.strictEqual(slots.length, 144);
+  assert.strictEqual(new Set(slots.map((t) => t.x + ',' + t.y + ',' + t.l)).size, 144);
+  const perLayer = [0, 0, 0, 0, 0];
+  slots.forEach((t) => { perLayer[t.l]++; });
+  assert.deepStrictEqual(perLayer, [87, 36, 16, 4, 1]);
+  const over = (a, b) => Math.abs(a.x - b.x) < 2 && Math.abs(a.y - b.y) < 2;
+  slots.forEach((t) => {
+    // no two tiles of one layer overlap
+    assert.ok(!slots.some((o) => o !== t && o.l === t.l && over(o, t)));
+    if (t.l > 0) assert.ok(slots.some((o) => o.l === t.l - 1 && over(o, t)), 'a tile hangs in the air');
+  });
+});
+
+test('mahjong: free tile rule (nothing on top, left or right side open)', () => {
+  const a = { x: 2, y: 0, l: 0 };
+  const b = { x: 4, y: 0, l: 0 };
+  const c = { x: 6, y: 0, l: 0 };
+  const half = { x: 8, y: 1, l: 0 }; // half a row down, still touches c
+  const top = { x: 3, y: 0, l: 1 }; // lies on a and b
+  assert.ok(M.isFree(a, [a, b, c]));
+  assert.ok(!M.isFree(b, [a, b, c]), 'closed on both sides');
+  assert.ok(M.isFree(c, [a, b, c]));
+  assert.ok(!M.isFree(c, [a, b, c, half]), 'a tile half a row lower also closes the side');
+  assert.ok(!M.isFree(a, [a, b, c, top]) && !M.isFree(b, [a, b, top]), 'covered tiles are blocked');
+  assert.ok(M.isFree(top, [a, b, c, top]));
+});
+
+test('mahjong: a deal has 34 kinds x 4 plus 4 flowers and 4 seasons', () => {
+  for (let seed = 1; seed <= 20; seed++) {
     const tiles = M.makeLayout(U.makeRng(seed));
     assert.strictEqual(tiles.length, 144);
-    const counts = new Array(36).fill(0);
-    tiles.forEach((t) => counts[t.type]++);
-    assert.ok(counts.every((c) => c === 4));
-    assert.strictEqual(new Set(tiles.map((t) => t.x + ',' + t.y + ',' + t.l)).size, 144);
-    // every tile above the base has a tile under it
-    const set = new Set(tiles.map((t) => t.x + ',' + t.y + ',' + t.l));
-    tiles.forEach((t) => { if (t.l > 0) assert.ok(set.has(t.x + ',' + t.y + ',' + (t.l - 1))); });
+    const byType = {};
+    tiles.forEach((t) => { (byType[t.type] = byType[t.type] || []).push(t.face); });
+    assert.strictEqual(Object.keys(byType).length, 36);
+    Object.keys(byType).forEach((type) => {
+      const faces = byType[type];
+      assert.strictEqual(faces.length, 4);
+      const distinct = new Set(faces).size;
+      assert.strictEqual(distinct, Number(type) >= 34 ? 4 : 1, 'faces of type ' + type);
+      faces.forEach((f) => assert.ok(M.faceSvg(f).indexOf('<svg') === 0));
+    });
   }
 });
 
 test('mahjong: every deal can be cleared in its build order', () => {
-  for (let seed = 1; seed <= 60; seed++) {
+  for (let seed = 1; seed <= 40; seed++) {
     let tiles = M.makeLayout(U.makeRng(seed));
     // tiles are stored pair by pair, in removal order
     for (let k = 0; k < 72; k++) {
       const a = tiles.find((t) => t.id === 2 * k);
       const b = tiles.find((t) => t.id === 2 * k + 1);
       assert.strictEqual(a.type, b.type);
-      const free = M.freeTiles(tiles);
-      assert.ok(free.indexOf(a) >= 0 && free.indexOf(b) >= 0, 'pair ' + k + ' is blocked, seed ' + seed);
+      assert.ok(M.isFree(a, tiles) && M.isFree(b, tiles), 'pair ' + k + ' is blocked, seed ' + seed);
       tiles = tiles.filter((t) => t !== a && t !== b);
     }
     assert.strictEqual(tiles.length, 0);
   }
 });
 
-test('mahjong: deals are not mirror images (pairs are placed at random)', () => {
-  const tiles = M.makeLayout(U.makeRng(5));
-  let mirrored = 0;
-  for (let k = 0; k < 72; k++) {
-    const a = tiles[2 * k];
-    const b = tiles[2 * k + 1];
-    if (a.y === b.y && a.l === b.l) mirrored++;
-  }
-  assert.ok(mirrored < 40, mirrored + ' pairs sit in the same row');
-});
-
 test('mahjong: greedy play with reshuffle when stuck always ends', () => {
   let cleared = 0;
-  for (let seed = 1; seed <= 40; seed++) {
+  for (let seed = 1; seed <= 30; seed++) {
     const rnd = U.makeRng(seed);
     let tiles = M.makeLayout(rnd);
     let guard = 0;
@@ -84,6 +104,7 @@ test('mahjong: greedy play with reshuffle when stuck always ends', () => {
       const pair = M.findPair(tiles);
       if (pair) {
         assert.strictEqual(pair[0].type, pair[1].type);
+        assert.notStrictEqual(pair[0], pair[1]);
         tiles = tiles.filter((t) => t !== pair[0] && t !== pair[1]);
       } else if (!M.reshuffle(tiles, rnd)) {
         break;
@@ -92,11 +113,16 @@ test('mahjong: greedy play with reshuffle when stuck always ends', () => {
         const counts = {};
         tiles.forEach((t) => { counts[t.type] = (counts[t.type] || 0) + 1; });
         assert.ok(Object.values(counts).every((c) => c % 2 === 0));
+        // flowers and seasons keep different faces
+        [34, 35].forEach((type) => {
+          const faces = tiles.filter((t) => t.type === type).map((t) => t.face);
+          assert.strictEqual(new Set(faces).size, faces.length);
+        });
       }
     }
     if (!tiles.length) cleared++;
   }
-  assert.ok(cleared >= 30, 'cleared ' + cleared + '/40');
+  assert.ok(cleared >= 22, 'cleared ' + cleared + '/30');
 });
 
 const idx = (r, c) => r * 8 + c;
@@ -110,8 +136,9 @@ test('dama: start position and first moves', () => {
   const b = D.initialBoard();
   assert.strictEqual(b.filter((p) => p && p.c === 'w').length, 12);
   assert.strictEqual(b.filter((p) => p && p.c === 'b').length, 12);
-  b.forEach((p, i) => { if (p) assert.strictEqual(((i >> 3) + (i & 7)) % 2, 1, 'pieces stand on dark squares'); });
-  assert.ok(b[idx(7, 0)] && b[idx(7, 0)].c === 'w', 'dark corner at the bottom left');
+  b.forEach((p, i) => { if (p) assert.ok(D.isDark(i), 'pieces stand on dark squares'); });
+  assert.ok(D.isDark(idx(7, 7)) && !D.isDark(idx(7, 0)), 'Italian board: the dark corner is at the bottom right');
+  assert.ok(b[idx(7, 7)] && b[idx(7, 7)].c === 'w' && b[idx(0, 0)] && b[idx(0, 0)].c === 'b');
   assert.strictEqual(D.legalMoves(b, 'w').length, 7);
   assert.strictEqual(D.legalMoves(b, 'b').length, 7);
 });

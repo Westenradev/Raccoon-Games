@@ -1,4 +1,4 @@
-// Briscola for 2 players: you against the Chihuahua. 120 points in total. 61 or more wins.
+// Briscola for 2 players: you against the computer. 120 points in total. 61 or more wins.
 (function (name, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -128,7 +128,7 @@
     let busy = false;
     let shown = null; // finished trick that stays on the table for a moment
     let note = '';
-    const root = U.el('div', { class: 'briscola game-panel' });
+    const root = U.el('div', { class: 'briscola game-panel tabletop' });
     container.appendChild(root);
 
     function later(fn, ms) {
@@ -140,7 +140,7 @@
       nextLeader = 1 - nextLeader;
       busy = false;
       shown = null;
-      note = hand.turn === HUMAN ? 'Tocca a te. Gioca una carta.' : 'Inizia il Chihuahua.';
+      note = hand.turn === HUMAN ? 'Tocca a te. Gioca una carta.' : 'Inizia l\'avversario.';
       render();
       proceed();
     }
@@ -163,19 +163,19 @@
 
     function afterPlay(r) {
       if (!r.trick) {
-        note = hand.turn === HUMAN ? 'Tocca a te. Rispondi alla carta del Chihuahua.' : 'Il Chihuahua sta pensando…';
+        note = hand.turn === HUMAN ? 'Tocca a te. Rispondi alla carta dell\'avversario.' : 'L\'avversario sta pensando…';
         return proceed();
       }
       // Leave both cards on the table for a moment, so the player sees who took the trick.
       shown = r.trick;
       busy = true;
       const mine = r.trick.winner === HUMAN;
-      note = (mine ? 'Prendi tu' : 'Prende il Chihuahua') + ': ' + r.trick.points + ' punti.';
+      note = (mine ? 'Prendi tu' : 'Prende l\'avversario') + ': ' + r.trick.points + ' punti.';
       if (A) mine ? A.sfx.ok() : A.sfx.bad();
       render();
       later(function () {
         shown = null;
-        note = hand.ended ? '' : (hand.turn === HUMAN ? 'Tocca a te. Gioca una carta.' : 'Gioca il Chihuahua.');
+        note = hand.ended ? '' : (hand.turn === HUMAN ? 'Tocca a te. Gioca una carta.' : 'Gioca l\'avversario.');
         proceed();
       }, 1500);
     }
@@ -198,9 +198,9 @@
       render();
       root.appendChild(U.el('div', { class: 'overlay' },
         U.el('div', { class: 'card-box' },
-          U.el('h2', { text: s.winner === HUMAN ? 'Hai vinto! 🦝🏆' : s.winner === CPU ? 'Vince il Chihuahua 🐕' : 'Pareggio: 60 a 60' }),
-          U.el('p', { text: 'Tu: ' + s.points[0] + ' punti · Chihuahua: ' + s.points[1] + ' punti' }),
-          U.el('p', { text: 'Partite vinte: tu ' + wins[0] + ' · Chihuahua ' + wins[1] }),
+          U.el('h2', { text: s.winner === HUMAN ? 'Hai vinto!' : s.winner === CPU ? 'Ha vinto l\'avversario' : 'Pareggio: 60 a 60' }),
+          U.el('p', { text: 'Tu: ' + s.points[0] + ' punti — avversario: ' + s.points[1] + ' punti' }),
+          U.el('p', { text: 'Partite vinte: tu ' + wins[0] + ', avversario ' + wins[1] }),
           U.el('button', { class: 'btn big', text: 'Nuova partita', onclick: startHand }))));
     }
 
@@ -208,29 +208,28 @@
       if (!alive) return;
       root.innerHTML = '';
       const pts = score(hand).points;
-      root.appendChild(U.el('div', { class: 'pill-row' },
-        U.el('div', { class: 'pill', text: 'Punti: tu ' + pts[0] + ' · Chihuahua ' + pts[1] }),
-        U.el('div', { class: 'pill', text: 'Partite: ' + wins[0] + ' - ' + wins[1] }),
-        U.el('div', { class: 'pill', text: 'Mazzo: ' + hand.deck.length })));
-
-      const trumpInfo = U.el('div', { class: 'trump-row' }, U.el('span', { text: 'Briscola:' }));
-      if (hand.deck.length) trumpInfo.appendChild(D.cardEl(hand.trumpCard, { small: true, disabled: true }));
-      const suitBadge = U.el('span', { class: 'trump-suit' });
-      suitBadge.innerHTML = D.suitSvg(hand.trumpSuit, 'inline');
-      suitBadge.appendChild(document.createTextNode(' ' + D.SUITS[hand.trumpSuit].name));
-      trumpInfo.appendChild(suitBadge);
-      root.appendChild(trumpInfo);
-
-      const cpuRow = U.el('div', { class: 'hand cpu' }, U.el('span', { class: 'seat', text: '🐕 Chihuahua' }));
-      hand.hands[CPU].forEach(function () { cpuRow.appendChild(D.cardEl(null, { hidden: true, small: true })); });
-      root.appendChild(cpuRow);
+      const cpuHand = U.el('div', { class: 'hand cpu' });
+      hand.hands[CPU].forEach(function () { cpuHand.appendChild(D.cardEl(null, { hidden: true, small: true })); });
+      // The deck with the briscola card sideways under it.
+      const stock = U.el('div', { class: 'stock' + (hand.deck.length ? '' : ' empty') });
+      const trump = D.cardEl(hand.trumpCard, { disabled: true });
+      trump.classList.add('trump');
+      stock.appendChild(trump);
+      if (hand.deck.length > 1) stock.appendChild(D.cardEl(null, { hidden: true }));
+      const stockBox = U.el('div', { class: 'pile' }, stock,
+        U.el('div', { class: 'stock-label' }, 'Briscola: ', U.el('b', { text: D.SUITS[hand.trumpSuit].name })),
+        U.el('div', { class: 'stock-label', text: hand.deck.length ? 'Nel mazzo: ' + hand.deck.length : 'Mazzo finito' }));
+      const seat = function (name, points) {
+        return U.el('div', { class: 'seat-name right' }, name, U.el('div', { class: 'seat-points', text: points + (points === 1 ? ' punto' : ' punti') }));
+      };
+      root.appendChild(U.el('div', { class: 'seat-row' }, seat('Avversario', pts[1]), cpuHand, stockBox));
 
       const cards = shown ? shown.cards : hand.table;
       const felt = U.el('div', { class: 'felt trick' });
       [CPU, HUMAN].forEach(function (who) {
         const c = cards[who];
         const slot = U.el('div', { class: 'slot' + (c ? '' : ' empty') + (shown && shown.winner === who ? ' winner' : '') });
-        slot.appendChild(U.el('div', { class: 'slot-name', text: who === CPU ? 'Chihuahua' : 'Tu' }));
+        slot.appendChild(U.el('div', { class: 'slot-name', text: who === CPU ? 'Avversario' : 'Tu' }));
         if (c) slot.appendChild(D.cardEl(c, { disabled: true }));
         felt.appendChild(slot);
       });
@@ -242,8 +241,9 @@
       hand.hands[HUMAN].forEach(function (c) {
         handRow.appendChild(D.cardEl(c, { disabled: !myTurn, onclick: function () { clickCard(c); } }));
       });
-      root.appendChild(handRow);
-      root.appendChild(U.el('div', { class: 'hint', text: 'Valore: Asso 11 · Tre 10 · Re 4 · Cavallo 3 · Fante 2. La briscola batte gli altri semi.' }));
+      root.appendChild(U.el('div', { class: 'seat-row' }, seat('Tu', pts[0]), handRow,
+        U.el('div', { class: 'pile' }, U.el('div', { text: 'Partite vinte' }), U.el('div', { class: 'scope', text: wins[0] + ' a ' + wins[1] }))));
+      root.appendChild(U.el('div', { class: 'hint', text: 'Asso 11 punti, Tre 10, Re 4, Cavallo 3, Fante 2. La briscola batte gli altri semi.' }));
     }
 
     startHand();
@@ -261,7 +261,7 @@
   }
 
   return {
-    meta: { id: 'briscola', title: 'Briscola', icon: '🃏', desc: 'Briscola contro il Chihuahua. Vince chi fa almeno 61 punti.' },
+    meta: { id: 'briscola', title: 'Briscola', desc: 'Contro il computer. Vince chi fa almeno 61 punti.' },
     mount: mount,
     newHand: newHand,
     play: play,

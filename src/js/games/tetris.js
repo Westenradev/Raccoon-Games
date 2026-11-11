@@ -1,4 +1,4 @@
-// Tetris Procioni. 10 x 20 board. Each piece has an animal symbol.
+// Tetris. 10 x 20 well, the seven classic pieces in their standard colours.
 (function (name, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -12,15 +12,15 @@
   const W = 10;
   const H = 20;
 
-  // Base shapes. Index = piece type.
+  // Base shapes with the standard colours: I cyan, O yellow, T purple, S green, Z red, J blue, L orange.
   const BASE = [
-    { name: 'I', emoji: '🦝', color: '#f59e0b', m: [[0, 0, 0, 0], [1, 1, 1, 1], [0, 0, 0, 0], [0, 0, 0, 0]] },
-    { name: 'O', emoji: '🧀', color: '#facc15', m: [[1, 1], [1, 1]] },
-    { name: 'T', emoji: '🐱', color: '#a78bfa', m: [[0, 1, 0], [1, 1, 1], [0, 0, 0]] },
-    { name: 'S', emoji: '🐟', color: '#34d399', m: [[0, 1, 1], [1, 1, 0], [0, 0, 0]] },
-    { name: 'Z', emoji: '🐭', color: '#f472b6', m: [[1, 1, 0], [0, 1, 1], [0, 0, 0]] },
-    { name: 'J', emoji: '🐕', color: '#60a5fa', m: [[1, 0, 0], [1, 1, 1], [0, 0, 0]] },
-    { name: 'L', emoji: '🦴', color: '#fb923c', m: [[0, 0, 1], [1, 1, 1], [0, 0, 0]] },
+    { name: 'I', color: '#00e0e8', m: [[0, 0, 0, 0], [1, 1, 1, 1], [0, 0, 0, 0], [0, 0, 0, 0]] },
+    { name: 'O', color: '#f2e400', m: [[1, 1], [1, 1]] },
+    { name: 'T', color: '#a020f0', m: [[0, 1, 0], [1, 1, 1], [0, 0, 0]] },
+    { name: 'S', color: '#18d818', m: [[0, 1, 1], [1, 1, 0], [0, 0, 0]] },
+    { name: 'Z', color: '#f02020', m: [[1, 1, 0], [0, 1, 1], [0, 0, 0]] },
+    { name: 'J', color: '#2848f0', m: [[1, 0, 0], [1, 1, 1], [0, 0, 0]] },
+    { name: 'L', color: '#f09a00', m: [[0, 0, 1], [1, 1, 1], [0, 0, 0]] },
   ];
 
   // Rotations precomputed for each type. ROT[type][rot] = matrix of 1 and 0.
@@ -84,6 +84,7 @@
       over: false,
       gravity: 0,
       cleared: 0,
+      clearedRows: [],
     };
     state.next = nextBag(state);
     spawn(state);
@@ -130,10 +131,12 @@
     cells(c.type, c.rot, c.x, c.y).forEach(function (p) {
       if (p.y >= 0) state.board[p.y][p.x] = c.type;
     });
-    // Clear full rows.
+    // Clear full rows. clearedRows keeps where they were, for the flash on screen.
     let cleared = 0;
+    state.clearedRows = [];
     for (let y = H - 1; y >= 0; y--) {
       if (state.board[y].every(function (v) { return v !== null; })) {
+        state.clearedRows.push(y - cleared);
         state.board.splice(y, 1);
         state.board.unshift(new Array(W).fill(null));
         cleared += 1;
@@ -209,86 +212,152 @@
   }
 
   // ---------- Browser interface ----------
+  const CELL = 30;
+  const SIDE = 170;
+  const VIEW_W = W * CELL + SIDE;
+  const VIEW_H = H * CELL;
+
+  // One block with a light edge on the top left and a dark edge on the bottom right.
+  function paintBlock(g, px, py, size, color) {
+    g.fillStyle = color;
+    g.fillRect(px, py, size, size);
+    const e = Math.max(2, Math.round(size * 0.13));
+    g.fillStyle = 'rgba(255,255,255,0.55)';
+    g.fillRect(px, py, size, e);
+    g.fillRect(px, py, e, size);
+    g.fillStyle = 'rgba(0,0,0,0.38)';
+    g.fillRect(px, py + size - e, size, e);
+    g.fillRect(px + size - e, py, e, size);
+    g.fillStyle = 'rgba(255,255,255,0.16)';
+    g.fillRect(px + e * 2, py + e * 2, size - e * 4, size - e * 4);
+  }
+
+  function paint(g, state, hi, fx) {
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, VIEW_W, VIEW_H);
+    // Well with a faint grid.
+    g.fillStyle = '#07070d';
+    g.fillRect(0, 0, W * CELL, VIEW_H);
+    g.strokeStyle = 'rgba(255,255,255,0.06)';
+    g.lineWidth = 1;
+    g.beginPath();
+    for (let x = 1; x < W; x++) { g.moveTo(x * CELL + 0.5, 0); g.lineTo(x * CELL + 0.5, VIEW_H); }
+    for (let y = 1; y < H; y++) { g.moveTo(0, y * CELL + 0.5); g.lineTo(W * CELL, y * CELL + 0.5); }
+    g.stroke();
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        if (state.board[y][x] !== null) paintBlock(g, x * CELL + 1, y * CELL + 1, CELL - 2, BASE[state.board[y][x]].color);
+      }
+    }
+    if (state.cur && !state.over) {
+      const c = state.cur;
+      g.strokeStyle = BASE[c.type].color;
+      g.globalAlpha = 0.55;
+      g.lineWidth = 2;
+      cells(c.type, c.rot, c.x, ghostY(state)).forEach(function (p) {
+        if (p.y >= 0) g.strokeRect(p.x * CELL + 3, p.y * CELL + 3, CELL - 6, CELL - 6);
+      });
+      g.globalAlpha = 1;
+      cells(c.type, c.rot, c.x, c.y).forEach(function (p) {
+        if (p.y >= 0) paintBlock(g, p.x * CELL + 1, p.y * CELL + 1, CELL - 2, BASE[c.type].color);
+      });
+    }
+    // White flash where rows were cleared, and sparks.
+    if (fx) {
+      fx.flashes.forEach(function (f) {
+        g.fillStyle = 'rgba(255,255,255,' + Math.max(0, f.life * 3).toFixed(2) + ')';
+        g.fillRect(0, f.row * CELL, W * CELL, CELL);
+      });
+      fx.sparks.forEach(function (p) {
+        g.fillStyle = p.color;
+        g.globalAlpha = Math.max(0, p.life * 1.6);
+        g.fillRect(p.x, p.y, 4, 4);
+      });
+      g.globalAlpha = 1;
+    }
+    // Side panel.
+    const sx = W * CELL;
+    const mid = sx + SIDE / 2;
+    g.fillStyle = '#101018';
+    g.fillRect(sx, 0, SIDE, VIEW_H);
+    g.fillStyle = '#3a3a4a';
+    g.fillRect(sx, 0, 3, VIEW_H);
+    AR.pixelText(g, 'PROSSIMO', mid, 30, 12, '#9aa0ff');
+    g.fillStyle = '#000';
+    g.fillRect(mid - 58, 46, 116, 86);
+    const shape = ROT[state.next][0];
+    let minR = 9, maxR = -1, minC = 9, maxC = -1;
+    shape.forEach(function (row, r) {
+      row.forEach(function (v, c) {
+        if (!v) return;
+        minR = Math.min(minR, r); maxR = Math.max(maxR, r); minC = Math.min(minC, c); maxC = Math.max(maxC, c);
+      });
+    });
+    const bs = 24;
+    const ox = mid - ((maxC - minC + 1) * bs) / 2;
+    const oy = 89 - ((maxR - minR + 1) * bs) / 2;
+    shape.forEach(function (row, r) {
+      row.forEach(function (v, c) {
+        if (v) paintBlock(g, ox + (c - minC) * bs + 1, oy + (r - minR) * bs + 1, bs - 2, BASE[state.next].color);
+      });
+    });
+    [['PUNTI', state.score], ['RECORD', Math.max(hi, state.score)], ['LIVELLO', state.level], ['RIGHE', state.lines]].forEach(function (row, i) {
+      AR.pixelText(g, row[0], mid, 176 + i * 74, 12, '#9aa0ff');
+      AR.pixelText(g, String(row[1]), mid, 204 + i * 74, 16, '#fff');
+    });
+  }
+
+  function thumb(el) {
+    const s = newGame(7);
+    const rows = ['....JJ....', 'ZZ..JSS.LL', 'IZZTJOSSLT', 'IOOTTOLLTT', 'IOOTSSILLL'];
+    const map = { I: 0, O: 1, T: 2, S: 3, Z: 4, J: 5, L: 6 };
+    rows.forEach(function (row, i) {
+      for (let x = 0; x < W; x++) if (row[x] !== '.') s.board[H - rows.length + i][x] = map[row[x]];
+    });
+    s.cur = { type: 2, rot: 0, x: 3, y: 9 };
+    AR.thumb(el, W * CELL, 330, function (g) {
+      g.translate(0, -270);
+      paint(g, s, 0, null);
+      g.translate(0, 270);
+    });
+  }
+
   function mount(container) {
-    const CELL = 30;
-    const SIDE = 160;
     const wrap = U.el('div', { class: 'arcade-stage' });
     container.appendChild(wrap);
-    const view = AR.createCanvas(wrap, W * CELL + SIDE, H * CELL, 'tetris');
+    const view = AR.createCanvas(wrap, VIEW_W, VIEW_H, 'tetris');
     const g = view.ctx;
     let hi = U.store.get('hi.tetris', 0);
     let state = newGame(1);
     let started = false;
     let paused = false;
+    const fx = { flashes: [], sparks: [] };
     // Time until a held key repeats, per direction.
     const hold = { left: 0, right: 0, down: 0 };
 
-    function drawBlock(x, y, type) {
-      g.fillStyle = BASE[type].color;
-      g.fillRect(x * CELL + 1, y * CELL + 1, CELL - 2, CELL - 2);
-      g.fillStyle = 'rgba(255,255,255,0.25)';
-      g.fillRect(x * CELL + 1, y * CELL + 1, CELL - 2, 4);
-      AR.emoji(g, BASE[type].emoji, x * CELL + CELL / 2, y * CELL + CELL / 2 + 2, 19);
-    }
-
     function draw() {
-      g.fillStyle = '#1b1035';
-      g.fillRect(0, 0, view.w, view.h);
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
-          g.fillStyle = (x + y) % 2 ? '#241547' : '#20123f';
-          g.fillRect(x * CELL, y * CELL, CELL, CELL);
-          if (state.board[y][x] !== null) drawBlock(x, y, state.board[y][x]);
-        }
-      }
-      if (state.cur && !state.over) {
-        const c = state.cur;
-        g.strokeStyle = 'rgba(255,255,255,0.4)';
-        g.lineWidth = 2;
-        cells(c.type, c.rot, c.x, ghostY(state)).forEach(function (p) {
-          if (p.y >= 0) g.strokeRect(p.x * CELL + 3, p.y * CELL + 3, CELL - 6, CELL - 6);
-        });
-        cells(c.type, c.rot, c.x, c.y).forEach(function (p) {
-          if (p.y >= 0) drawBlock(p.x, p.y, c.type);
-        });
-      }
-      // Side panel.
-      const sx = W * CELL;
-      const mid = sx + SIDE / 2;
-      g.fillStyle = '#120a26';
-      g.fillRect(sx, 0, SIDE, view.h);
-      AR.text(g, 'PROSSIMO', mid, 26, 14, '#fde68a');
-      const shape = ROT[state.next][0];
-      const size = shape.length;
-      shape.forEach(function (row, r) {
-        row.forEach(function (v, c) {
-          if (!v) return;
-          const bx = mid - (size * 24) / 2 + c * 24;
-          const by = 48 + r * 24;
-          g.fillStyle = BASE[state.next].color;
-          g.fillRect(bx + 1, by + 1, 22, 22);
-          AR.emoji(g, BASE[state.next].emoji, bx + 12, by + 13, 15);
-        });
-      });
-      const rows = [['PUNTI', state.score], ['RECORD', Math.max(hi, state.score)], ['LIVELLO', state.level], ['RIGHE', state.lines]];
-      rows.forEach(function (row, i) {
-        AR.text(g, row[0], mid, 180 + i * 62, 13, '#fde68a');
-        AR.text(g, String(row[1]), mid, 204 + i * 62, 22, '#fff');
-      });
-      ['← → muovi', '↑ ruota', '↓ giù veloce', 'Spazio: caduta', 'P: pausa'].forEach(function (line, i) {
-        AR.text(g, line, mid, 452 + i * 22, 12, '#b9afd9');
-      });
+      paint(g, state, hi, fx);
       if (paused) {
-        g.fillStyle = 'rgba(0,0,0,0.65)';
-        g.fillRect(0, 0, view.w, view.h);
-        AR.text(g, 'PAUSA', view.w / 2, view.h / 2 - 14, 40, '#fff');
-        AR.text(g, 'Premi P per continuare', view.w / 2, view.h / 2 + 26, 16, '#fde68a');
+        g.fillStyle = 'rgba(0,0,0,0.72)';
+        g.fillRect(0, 0, VIEW_W, VIEW_H);
+        AR.pixelText(g, 'PAUSA', VIEW_W / 2, VIEW_H / 2 - 16, 28, '#ffe600');
+        AR.pixelText(g, 'Premi P', VIEW_W / 2, VIEW_H / 2 + 26, 13, '#fff');
       }
     }
 
     function afterAction() {
       if (state.cleared) {
         if (A) A.sfx.clear();
+        state.clearedRows.forEach(function (row) {
+          fx.flashes.push({ row: row, life: 0.33 });
+          for (let i = 0; i < 14; i++) {
+            fx.sparks.push({
+              x: Math.random() * W * CELL, y: row * CELL + CELL / 2,
+              vx: (Math.random() - 0.5) * 260, vy: -Math.random() * 220,
+              life: 0.6, color: BASE[Math.floor(Math.random() * 7)].color,
+            });
+          }
+        });
         state.cleared = 0;
       }
       if (state.over) gameOver();
@@ -301,17 +370,28 @@
         U.store.set('hi.tetris', hi);
       }
       if (A) A.sfx.lose();
-      AR.overlay(wrap, 'Partita finita 🦝', 'Punti: ' + state.score + ' · Righe: ' + state.lines + ' · Record: ' + hi, 'Gioca ancora', newRun);
+      AR.overlay(wrap, 'PARTITA FINITA', 'Punti: ' + state.score + '. Righe: ' + state.lines + '. Record: ' + hi + '.', 'GIOCA ANCORA', newRun);
     }
 
     function newRun() {
       state = newGame(Math.floor(Math.random() * 1e9));
       started = true;
       paused = false;
+      fx.flashes = [];
+      fx.sparks = [];
       hold.left = hold.right = hold.down = 0;
     }
 
     function frame(dt) {
+      fx.flashes.forEach(function (f) { f.life -= dt; });
+      fx.flashes = fx.flashes.filter(function (f) { return f.life > 0; });
+      fx.sparks.forEach(function (p) {
+        p.life -= dt;
+        p.vy += 700 * dt;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+      });
+      fx.sparks = fx.sparks.filter(function (p) { return p.life > 0; });
       if (!started || paused || state.over) return;
       const inp = AR.dirInput();
       ['left', 'right', 'down'].forEach(function (d) {
@@ -346,7 +426,8 @@
       afterAction();
     });
     const loop = AR.startLoop(frame, draw);
-    AR.overlay(wrap, 'Tetris dei Procioni 🦝', 'Frecce ← → per muovere, ↑ per ruotare, ↓ per scendere. Spazio fa cadere il pezzo. P mette in pausa.', 'Inizia', newRun);
+    AR.help(wrap, 'Frecce sinistra e destra: muovi. Freccia su: ruota. Freccia giù: scendi. Spazio: lascia cadere. P: pausa.');
+    AR.overlay(wrap, 'TETRIS', 'Incastra i pezzi e riempi le righe. Una riga piena sparisce.', 'INIZIA', newRun);
 
     return {
       destroy: function () {
@@ -362,8 +443,9 @@
   }
 
   return {
-    meta: { id: 'tetris', title: 'Tetris', icon: '🧱', desc: 'Incastra i pezzi e completa le righe.' },
+    meta: { id: 'tetris', title: 'Tetris', desc: 'Incastra i pezzi e completa le righe.' },
     mount: mount,
+    thumb: thumb,
     newGame: newGame,
     move: move,
     rotate: rotate,

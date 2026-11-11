@@ -1,7 +1,7 @@
-// Raccoon-man. Eat every acorn in the maze. A cat, a chihuahua and a mouse chase you.
-// From level 3 a second chihuahua joins them. The chasers hunt for a while, then wander.
-// A pizza slice makes the chasers afraid for a few seconds: then you can catch them.
-// The maze is generated for each level. It has no dead ends and every acorn can be reached.
+// Raccoon-man (Pac-Man style). Eat every dot in the maze while four ghosts chase you.
+// A big dot makes the ghosts afraid for a few seconds: then you can catch them.
+// Three ghosts at the start, the fourth joins from level 3. They hunt for a while, then wander.
+// The maze is generated for each level. It has no dead ends and every dot can be reached.
 (function (name, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -20,17 +20,17 @@
   const OPP = { up: 'down', down: 'up', left: 'right', right: 'left' };
   // smart = how often a chaser takes the shortest way to the raccoon while it hunts.
   const CHASERS = [
-    { emoji: '🐱', smart: 0.65 },
-    { emoji: '🐕', smart: 0.45 },
-    { emoji: '🐭', smart: 0.25 },
-    { emoji: '🐕', smart: 0.35 },
+    { color: '#ff2a1a', smart: 0.65 },
+    { color: '#ffb8ff', smart: 0.45 },
+    { color: '#22e8f0', smart: 0.25 },
+    { color: '#ffb852', smart: 0.35 },
   ];
   const HUNT_TIME = 14; // seconds of hunting, then...
   const WANDER_TIME = 6; // ...seconds of wandering at random
   const POWER_TIME = 7;
   const FREEZE_TIME = 1.2;
 
-  // Grid codes: '#' wall, '.' acorn, 'o' pizza power-up, ' ' empty floor.
+  // Grid codes: '#' wall, '.' dot, 'o' big dot (power), ' ' empty floor.
   function buildMaze(seed) {
     const rnd = U.makeRng(seed);
     const g = [];
@@ -192,7 +192,7 @@
     const h = state.house;
     const spots = [[0, -1], [-1, 0], [1, 0], [0, 1]];
     state.ghosts = CHASERS.slice(0, state.level < 3 ? 3 : 4).map(function (c, i) {
-      return { id: i, emoji: c.emoji, x: h.x + spots[i][0], y: h.y + spots[i][1], dir: 'up', p: 0, moving: false, eaten: false, wait: i * 2.5 };
+      return { id: i, color: c.color, x: h.x + spots[i][0], y: h.y + spots[i][1], dir: 'up', p: 0, moving: false, eaten: false, wait: i * 2.5 };
     });
   }
 
@@ -360,12 +360,149 @@
   }
 
   // ---------- Browser interface ----------
+  const TILE = 30;
+  const HUD = 40;
+  const VIEW_W = W * TILE;
+  const VIEW_H = H * TILE + HUD;
+  const WALL = '#2233ee';
+  const DOT = '#ffb8ae';
+  const ANGLE = { right: 0, down: Math.PI / 2, left: Math.PI, up: -Math.PI / 2 };
+
+  function isWall(grid, x, y) {
+    return x < 0 || y < 0 || x >= W || y >= H || grid[y][x] === '#';
+  }
+
+  // Walls are black inside with a thin blue outline, like the 1980 arcade maze.
+  function paintMaze(g, grid, clock) {
+    const t = 3;
+    g.fillStyle = WALL;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) if (grid[y][x] === '#') g.fillRect(x * TILE, HUD + y * TILE, TILE, TILE);
+    }
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        if (grid[y][x] !== '#') continue;
+        const l = isWall(grid, x - 1, y) ? 0 : t;
+        const r = isWall(grid, x + 1, y) ? 0 : t;
+        const u = isWall(grid, x, y - 1) ? 0 : t;
+        const d = isWall(grid, x, y + 1) ? 0 : t;
+        const sx = x * TILE;
+        const sy = HUD + y * TILE;
+        g.fillStyle = '#000';
+        g.fillRect(sx + l, sy + u, TILE - l - r, TILE - u - d);
+        // Inner corners: keep a blue corner where only the diagonal tile is floor.
+        g.fillStyle = WALL;
+        if (!l && !u && !isWall(grid, x - 1, y - 1)) g.fillRect(sx, sy, t, t);
+        if (!r && !u && !isWall(grid, x + 1, y - 1)) g.fillRect(sx + TILE - t, sy, t, t);
+        if (!l && !d && !isWall(grid, x - 1, y + 1)) g.fillRect(sx, sy + TILE - t, t, t);
+        if (!r && !d && !isWall(grid, x + 1, y + 1)) g.fillRect(sx + TILE - t, sy + TILE - t, t, t);
+      }
+    }
+    g.fillStyle = DOT;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const cx = x * TILE + TILE / 2;
+        const cy = HUD + y * TILE + TILE / 2;
+        if (grid[y][x] === '.') {
+          g.fillRect(cx - 2.5, cy - 2.5, 5, 5);
+        } else if (grid[y][x] === 'o' && Math.floor(clock * 4) % 2 === 0) {
+          g.beginPath();
+          g.arc(cx, cy, 8, 0, Math.PI * 2);
+          g.fill();
+        }
+      }
+    }
+  }
+
+  function paintPac(g, x, y, dir, open) {
+    const a = ANGLE[dir] || 0;
+    g.fillStyle = '#ffee00';
+    g.beginPath();
+    g.moveTo(x, y);
+    g.arc(x, y, TILE / 2 - 2, a + open, a + Math.PI * 2 - open);
+    g.closePath();
+    g.fill();
+  }
+
+  // mode: 'chase', 'scared', 'flash' or 'eyes'.
+  function paintGhost(g, x, y, color, dir, mode, clock) {
+    const r = TILE / 2 - 2;
+    if (mode !== 'eyes') {
+      g.fillStyle = mode === 'scared' ? '#2233ee' : mode === 'flash' ? '#f4f4f4' : color;
+      g.beginPath();
+      g.arc(x, y - 1, r, Math.PI, 0);
+      g.lineTo(x + r, y + r);
+      // The hem has three points that move as the ghost walks.
+      const shift = Math.floor(clock * 8) % 2 ? r / 3 : 0;
+      for (let i = 0; i < 3; i++) {
+        const x0 = x + r - (i * 2 * r) / 3;
+        g.lineTo(x0 - r / 3 + shift / 2, y + r - 5);
+        g.lineTo(x0 - (2 * r) / 3, y + r);
+      }
+      g.closePath();
+      g.fill();
+    }
+    if (mode === 'scared' || mode === 'flash') {
+      g.fillStyle = mode === 'flash' ? '#e02020' : '#ffd0c0';
+      g.fillRect(x - 6, y - 5, 4, 4);
+      g.fillRect(x + 2, y - 5, 4, 4);
+      g.fillRect(x - 8, y + 4, 3, 2); g.fillRect(x - 5, y + 2, 3, 2); g.fillRect(x - 2, y + 4, 3, 2);
+      g.fillRect(x + 1, y + 2, 3, 2); g.fillRect(x + 4, y + 4, 3, 2);
+      return;
+    }
+    const d = DIRS[dir] || [0, 0];
+    g.fillStyle = '#fff';
+    g.beginPath();
+    g.ellipse(x - 5 + d[0] * 2, y - 3 + d[1] * 2, 4, 5, 0, 0, Math.PI * 2);
+    g.ellipse(x + 5 + d[0] * 2, y - 3 + d[1] * 2, 4, 5, 0, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = '#1a2cd0';
+    g.beginPath();
+    g.arc(x - 5 + d[0] * 4, y - 3 + d[1] * 4, 2.2, 0, Math.PI * 2);
+    g.arc(x + 5 + d[0] * 4, y - 3 + d[1] * 4, 2.2, 0, Math.PI * 2);
+    g.fill();
+  }
+
+  function paint(g, state, hi, clock, ready) {
+    const px = function (pos) { return { x: pos.x * TILE + TILE / 2, y: HUD + pos.y * TILE + TILE / 2 }; };
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, VIEW_W, VIEW_H);
+    paintMaze(g, state.grid, clock);
+    state.ghosts.forEach(function (gh) {
+      const pos = px(positionOf(gh));
+      let mode = 'chase';
+      if (gh.eaten) mode = 'eyes';
+      else if (state.scared > 0) mode = state.scared < 2 && Math.floor(clock * 6) % 2 === 0 ? 'flash' : 'scared';
+      paintGhost(g, pos.x, pos.y, gh.color, gh.dir, mode, clock);
+    });
+    if (!state.over || state.won) {
+      const pp = px(positionOf(state.pac));
+      const open = state.pac.moving ? 0.08 + Math.abs(Math.sin(clock * 14)) * 0.6 : 0.35;
+      paintPac(g, pp.x, pp.y, state.pac.dir, open);
+    }
+    if (ready) AR.pixelText(g, 'PRONTI!', VIEW_W / 2, HUD + (state.house.y + 3) * TILE + TILE / 2, 16, '#ffee00');
+    AR.pixelText(g, 'PUNTI ' + state.score, 10, HUD / 2, 12, '#fff', 'left');
+    AR.pixelText(g, 'LIVELLO ' + state.level, VIEW_W / 2, HUD / 2, 12, '#ffb852');
+    for (let i = 0; i < state.lives; i++) paintPac(g, VIEW_W - 22 - i * 30, HUD / 2, 'left', 0.5);
+  }
+
+  function thumb(el) {
+    const s = newGame(11, 1);
+    s.pac.x = 4; s.pac.y = 5; s.pac.dir = 'right';
+    for (let x = 1; x <= 4; x++) if (s.grid[5][x] !== '#') s.grid[5][x] = ' ';
+    s.ghosts.forEach(function (gh, i) { gh.x = 12 + i * 2; gh.y = 5; gh.dir = 'left'; });
+    AR.thumb(el, VIEW_W, 300, function (g) {
+      g.save();
+      g.translate(0, -HUD - 40);
+      paint(g, s, 0, 0.1, false);
+      g.restore();
+    });
+  }
+
   function mount(container) {
-    const TILE = 30;
-    const HUD = 36;
     const wrap = U.el('div', { class: 'arcade-stage' });
     container.appendChild(wrap);
-    const view = AR.createCanvas(wrap, W * TILE, H * TILE + HUD, 'pacman');
+    const view = AR.createCanvas(wrap, VIEW_W, VIEW_H, 'pacman');
     const g = view.ctx;
     let hi = U.store.get('hi.pacman', 0);
     let seedBase = Math.floor(Math.random() * 1e6);
@@ -373,73 +510,8 @@
     let started = false;
     let clock = 0;
 
-    function px(pos) {
-      return { x: pos.x * TILE + TILE / 2, y: HUD + pos.y * TILE + TILE / 2 };
-    }
-
-    function drawMaze() {
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
-          const c = state.grid[y][x];
-          const sx = x * TILE;
-          const sy = HUD + y * TILE;
-          if (c === '#') {
-            g.fillStyle = '#1e2a78';
-            g.fillRect(sx, sy, TILE, TILE);
-            // Light edge where a wall meets the floor.
-            g.fillStyle = '#7c9cff';
-            if (y > 0 && state.grid[y - 1][x] !== '#') g.fillRect(sx, sy, TILE, 3);
-            if (y < H - 1 && state.grid[y + 1][x] !== '#') g.fillRect(sx, sy + TILE - 3, TILE, 3);
-            if (x > 0 && state.grid[y][x - 1] !== '#') g.fillRect(sx, sy, 3, TILE);
-            if (x < W - 1 && state.grid[y][x + 1] !== '#') g.fillRect(sx + TILE - 3, sy, 3, TILE);
-          } else if (c === '.') {
-            g.fillStyle = '#fbbf77';
-            g.beginPath();
-            g.arc(sx + TILE / 2, sy + TILE / 2, 3.5, 0, Math.PI * 2);
-            g.fill();
-          } else if (c === 'o') {
-            AR.emoji(g, '🍕', sx + TILE / 2, sy + TILE / 2, TILE - 8 + Math.sin(clock * 6) * 2);
-          }
-        }
-      }
-    }
-
     function draw() {
-      g.fillStyle = '#05050f';
-      g.fillRect(0, 0, view.w, view.h);
-      drawMaze();
-      state.ghosts.forEach(function (gh) {
-        const pos = px(positionOf(gh));
-        if (gh.eaten) {
-          AR.emoji(g, '👀', pos.x, pos.y, TILE - 14);
-          return;
-        }
-        if (state.scared > 0) {
-          const blink = state.scared < 2 && Math.floor(clock * 6) % 2 === 0;
-          g.fillStyle = blink ? '#e0e7ff' : '#3b82f6';
-          g.beginPath();
-          g.arc(pos.x, pos.y, TILE / 2 - 2, 0, Math.PI * 2);
-          g.fill();
-          g.globalAlpha = 0.75;
-          AR.emoji(g, gh.emoji, pos.x, pos.y + 1, TILE - 12);
-          g.globalAlpha = 1;
-        } else {
-          AR.emoji(g, gh.emoji, pos.x, pos.y + 1, TILE - 4);
-        }
-      });
-      if (!state.over || state.won) {
-        const pp = px(positionOf(state.pac));
-        AR.emoji(g, '🦝', pp.x, pp.y + 1, TILE - 2);
-      }
-      if (started && state.freeze > 0 && !state.over) {
-        AR.text(g, 'Pronti!', view.w / 2, HUD + (state.house.y + 3) * TILE + TILE / 2, 20, '#fde047');
-      }
-      g.fillStyle = '#0f0d2b';
-      g.fillRect(0, 0, view.w, HUD);
-      AR.text(g, 'Punti ' + state.score, 10, HUD / 2, 15, '#fef3c7', 'left');
-      AR.text(g, 'Livello ' + state.level + ' · Record ' + Math.max(hi, state.score), view.w / 2, HUD / 2, 15, '#fef3c7');
-      AR.text(g, 'Vite', view.w - 84, HUD / 2, 15, '#fef3c7', 'right');
-      for (let i = 0; i < state.lives; i++) AR.emoji(g, '🦝', view.w - 68 + i * 24, HUD / 2 + 1, 18);
+      paint(g, state, hi, clock, started && state.freeze > 0 && !state.over);
     }
 
     function frame(dt) {
@@ -467,10 +539,10 @@
         const level = state.level + 1;
         const score = state.score;
         const lives = state.lives;
-        AR.overlay(wrap, 'Ghiande finite! 🦝🌰', 'Punti: ' + score + ' · Record: ' + hi, 'Livello ' + level, function () { startLevel(level, score, lives); });
+        AR.overlay(wrap, 'LIVELLO SUPERATO', 'Punti: ' + score + '. Record: ' + hi + '.', 'LIVELLO ' + level, function () { startLevel(level, score, lives); });
       } else {
         if (A) A.sfx.lose();
-        AR.overlay(wrap, 'Ti hanno preso! 🐱', 'Punti: ' + state.score + ' · Livello: ' + state.level + ' · Record: ' + hi, 'Gioca ancora', function () { startLevel(1, 0, 3); });
+        AR.overlay(wrap, 'PARTITA FINITA', 'Punti: ' + state.score + '. Livello: ' + state.level + '. Record: ' + hi + '.', 'GIOCA ANCORA', function () { startLevel(1, 0, 3); });
       }
     }
 
@@ -485,7 +557,8 @@
       if (down && KEY_DIR[k] && started) state.pac.want = KEY_DIR[k];
     });
     const loop = AR.startLoop(frame, draw);
-    AR.overlay(wrap, 'Raccoon-man 🦝', 'Usa le frecce per muoverti. Mangia tutte le ghiande. Il gatto, il topo e i chihuahua ti inseguono: la pizza 🍕 li spaventa e puoi acchiapparli.', 'Inizia', function () { startLevel(1, 0, 3); });
+    AR.help(wrap, 'Usa le quattro frecce per muoverti nel labirinto.');
+    AR.overlay(wrap, 'RACCOON-MAN', 'Mangia tutti i puntini. I fantasmi ti inseguono. Il puntino grosso li spaventa: allora puoi mangiarli.', 'INIZIA', function () { startLevel(1, 0, 3); });
     return {
       destroy: function () {
         loop.stop();
@@ -499,8 +572,9 @@
   }
 
   return {
-    meta: { id: 'pacman', title: 'Raccoon-man', icon: '🌰', desc: 'Mangia le ghiande nel labirinto e scappa da gatti e chihuahua.' },
+    meta: { id: 'pacman', title: 'Raccoon-man', desc: 'Mangia i puntini e scappa dai fantasmi.' },
     mount: mount,
+    thumb: thumb,
     buildMaze: buildMaze,
     newGame: newGame,
     update: update,

@@ -1,4 +1,4 @@
-// Bolle Procioni (bubble shooter). Three or more bubbles of the same kind pop.
+// Bolle (bubble shooter). Three or more bubbles of the same colour pop.
 // Bubbles that lose their link to the ceiling fall. Every few shots a new row comes down.
 // Clear every bubble to reach the next level.
 (function (name, factory) {
@@ -22,8 +22,10 @@
   const SPEED = 760;
   const SHOTS_PER_ROW = 6;
   const MAX_ANGLE = 1.35;
-  const KINDS = ['🦝', '🐭', '🐱', '🐕', '🐟', '🧀'];
-  const COLORS = ['#f59e0b', '#94a3b8', '#fb7185', '#60a5fa', '#34d399', '#fde047'];
+  // Six colours. Each one also has its own mark, so they can be told apart without colour.
+  const COLORS = ['#e53935', '#fdd835', '#43a047', '#1e88e5', '#8e24aa', '#fb8c00'];
+  const DARK = ['#8e1512', '#b59400', '#1f6b24', '#0d4c93', '#501064', '#a85a00'];
+  const KINDS = COLORS;
 
   // Row ids are absolute. Even rows hold 10 bubbles, odd rows hold 9 and are shifted.
   const isEven = function (rid) { return ((rid % 2) + 2) % 2 === 0; };
@@ -268,6 +270,121 @@
   }
 
   // ---------- Browser interface ----------
+  // The mark inside each bubble: disc, triangle, square, diamond, cross, ring.
+  function mark(g, x, y, kind) {
+    const r = 5.5;
+    g.fillStyle = 'rgba(255,255,255,0.8)';
+    g.strokeStyle = 'rgba(255,255,255,0.8)';
+    g.lineWidth = 2.6;
+    g.beginPath();
+    if (kind === 0) {
+      g.arc(x, y, r - 1, 0, Math.PI * 2);
+      g.fill();
+    } else if (kind === 1) {
+      g.moveTo(x, y - r); g.lineTo(x + r, y + r - 1); g.lineTo(x - r, y + r - 1);
+      g.closePath();
+      g.fill();
+    } else if (kind === 2) {
+      g.fillRect(x - r + 1, y - r + 1, r * 2 - 2, r * 2 - 2);
+    } else if (kind === 3) {
+      g.moveTo(x, y - r - 1); g.lineTo(x + r, y); g.lineTo(x, y + r + 1); g.lineTo(x - r, y);
+      g.closePath();
+      g.fill();
+    } else if (kind === 4) {
+      g.moveTo(x - r, y); g.lineTo(x + r, y); g.moveTo(x, y - r); g.lineTo(x, y + r);
+      g.stroke();
+    } else {
+      g.arc(x, y, r - 1, 0, Math.PI * 2);
+      g.stroke();
+    }
+  }
+
+  // A glass ball: dark rim, bright body, a white glint on the top left.
+  function paintBubble(g, x, y, kind, alpha) {
+    g.globalAlpha = alpha == null ? 1 : alpha;
+    const body = g.createRadialGradient(x - 5, y - 6, 2, x, y, R);
+    body.addColorStop(0, '#ffffff');
+    body.addColorStop(0.28, COLORS[kind]);
+    body.addColorStop(1, DARK[kind]);
+    g.fillStyle = body;
+    g.beginPath();
+    g.arc(x, y, R - 1, 0, Math.PI * 2);
+    g.fill();
+    mark(g, x, y + 2, kind);
+    g.fillStyle = 'rgba(255,255,255,0.85)';
+    g.beginPath();
+    g.ellipse(x - 6, y - 8, 4.5, 2.6, -0.6, 0, Math.PI * 2);
+    g.fill();
+    g.globalAlpha = 1;
+  }
+
+  function paint(g, state, hi, opts) {
+    const o = opts || {};
+    // Well.
+    const bg = g.createLinearGradient(0, TOP, 0, HEIGHT);
+    bg.addColorStop(0, '#0a1a3a');
+    bg.addColorStop(1, '#05070f');
+    g.fillStyle = bg;
+    g.fillRect(0, 0, WIDTH, HEIGHT);
+    g.fillStyle = 'rgba(255,255,255,0.03)';
+    for (let x = 0; x < WIDTH; x += 2 * R) g.fillRect(x, TOP, R, DANGER_Y + R - TOP);
+    // Ceiling bar that comes down, and the limit line.
+    g.fillStyle = '#5a6a8a';
+    g.fillRect(0, TOP - 3, WIDTH, 5);
+    g.fillStyle = '#ff3b30';
+    for (let x = 0; x < WIDTH; x += 16) g.fillRect(x, DANGER_Y + R, 9, 3);
+
+    state.grid.forEach(function (kind, k) {
+      const cell = unkey(k);
+      const p = posOf(cell[0], cell[1], state.base);
+      paintBubble(g, p.x, p.y, kind);
+    });
+    (o.particles || []).forEach(function (p) { paintBubble(g, p.x, p.y, p.kind, Math.max(0, p.life)); });
+
+    if (o.aim && !state.moving && !state.over) {
+      g.fillStyle = 'rgba(255,255,255,0.8)';
+      aimPath(state, 520).forEach(function (p) { g.fillRect(p.x - 2, p.y - 2, 4, 4); });
+    }
+    // Launcher: a round base with a pointer.
+    g.save();
+    g.translate(SHOOT_X, SHOOT_Y);
+    g.fillStyle = '#2a3550';
+    g.beginPath();
+    g.arc(0, 10, 30, Math.PI, 0);
+    g.fill();
+    g.rotate(state.angle);
+    g.fillStyle = '#d7dbe6';
+    g.fillRect(-3, -46, 6, 30);
+    g.beginPath();
+    g.moveTo(0, -58); g.lineTo(9, -44); g.lineTo(-9, -44);
+    g.closePath();
+    g.fill();
+    g.restore();
+    if (state.moving) paintBubble(g, state.moving.x, state.moving.y, state.moving.kind);
+    else paintBubble(g, SHOOT_X, SHOOT_Y, state.cur);
+    AR.pixelText(g, 'DOPO', WIDTH - 44, SHOOT_Y - 28, 9, '#9aa0ff');
+    paintBubble(g, WIDTH - 44, SHOOT_Y, state.next);
+    AR.pixelText(g, 'FILE ' + state.rowsLeft, 10, HEIGHT - 14, 9, '#9aa0ff', 'left');
+
+    // Score bar.
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, WIDTH, TOP - 3);
+    AR.pixelText(g, String(state.score).padStart(5, '0'), 8, TOP / 2 - 1, 12, '#fff', 'left');
+    AR.pixelText(g, 'LIV.' + state.level, WIDTH / 2, TOP / 2 - 1, 10, '#ffe600');
+    AR.pixelText(g, String(Math.max(hi, state.score)).padStart(5, '0'), WIDTH - 8, TOP / 2 - 1, 12, '#ff4a30', 'right');
+  }
+
+  function thumb(el) {
+    const s = newGame(9, 3);
+    s.angle = -0.45;
+    AR.thumb(el, WIDTH, 270, function (g) {
+      g.save();
+      g.translate(0, -TOP + 4);
+      paint(g, s, 0, { aim: true });
+      g.restore();
+    });
+  }
+
   function mount(container) {
     const wrap = U.el('div', { class: 'arcade-stage' });
     container.appendChild(wrap);
@@ -277,65 +394,9 @@
     let state = newGame(1, 1, 0);
     let started = false;
     let particles = [];
-    let loop = null;
-
-    function drawBubble(x, y, kind, alpha) {
-      g.globalAlpha = alpha == null ? 1 : alpha;
-      g.beginPath();
-      g.arc(x, y, R - 1, 0, Math.PI * 2);
-      g.fillStyle = COLORS[kind];
-      g.fill();
-      g.lineWidth = 2;
-      g.strokeStyle = 'rgba(255,255,255,0.65)';
-      g.stroke();
-      AR.emoji(g, KINDS[kind], x, y + 1, R * 1.25);
-      g.globalAlpha = 1;
-    }
 
     function draw() {
-      g.fillStyle = '#1e1b4b';
-      g.fillRect(0, 0, WIDTH, HEIGHT);
-      g.fillStyle = '#17153a';
-      g.fillRect(0, DANGER_Y + R, WIDTH, HEIGHT - DANGER_Y - R);
-      // Danger line.
-      g.strokeStyle = 'rgba(248,113,113,0.8)';
-      g.lineWidth = 2;
-      g.setLineDash([8, 6]);
-      g.beginPath();
-      g.moveTo(0, DANGER_Y + R);
-      g.lineTo(WIDTH, DANGER_Y + R);
-      g.stroke();
-      g.setLineDash([]);
-
-      state.grid.forEach(function (kind, k) {
-        const cell = unkey(k);
-        const p = posOf(cell[0], cell[1], state.base);
-        drawBubble(p.x, p.y, kind);
-      });
-      particles.forEach(function (p) { drawBubble(p.x, p.y, p.kind, Math.max(0, p.life)); });
-
-      if (started && !state.moving && !state.over) {
-        g.fillStyle = 'rgba(253,230,138,0.85)';
-        aimPath(state, 520).forEach(function (p) {
-          g.beginPath();
-          g.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
-          g.fill();
-        });
-      }
-      if (state.moving) drawBubble(state.moving.x, state.moving.y, state.moving.kind);
-      else drawBubble(SHOOT_X, SHOOT_Y, state.cur);
-      AR.emoji(g, '🦝', SHOOT_X - 48, SHOOT_Y + 8, 34);
-      AR.text(g, 'Prossima', WIDTH - 44, SHOOT_Y - 26, 11, '#c7d2fe');
-      drawBubble(WIDTH - 44, SHOOT_Y, state.next);
-      AR.text(g, 'File in arrivo: ' + state.rowsLeft, 8, HEIGHT - 14, 12, '#c7d2fe', 'left');
-      AR.text(g, 'Nuova fila tra ' + (state.rowsLeft ? SHOTS_PER_ROW - (state.shots % SHOTS_PER_ROW) : '—') + ' tiri', WIDTH - 8, HEIGHT - 14, 12, '#c7d2fe', 'right');
-
-      // Score bar.
-      g.fillStyle = '#0f0d2b';
-      g.fillRect(0, 0, WIDTH, TOP);
-      AR.text(g, 'Punti ' + state.score, 8, TOP / 2, 14, '#fef3c7', 'left');
-      AR.text(g, 'Livello ' + state.level, WIDTH / 2, TOP / 2, 14, '#fef3c7');
-      AR.text(g, 'Record ' + Math.max(hi, state.score), WIDTH - 8, TOP / 2, 14, '#fef3c7', 'right');
+      paint(g, state, hi, { particles: particles, aim: started });
     }
 
     function frame(dt) {
@@ -373,10 +434,10 @@
         if (A) A.sfx.win();
         const next = state.level + 1;
         const score = state.score + 100;
-        AR.overlay(wrap, 'Livello ' + state.level + ' completato! 🦝🎉', 'Punti: ' + score + ' (bonus +100)', 'Livello ' + next, function () { startLevel(next, score); });
+        AR.overlay(wrap, 'LIVELLO ' + state.level + ' FINITO', 'Punti: ' + score + ' (100 di premio).', 'LIVELLO ' + next, function () { startLevel(next, score); });
       } else {
         if (A) A.sfx.lose();
-        AR.overlay(wrap, 'Le bolle sono scese troppo 🐱', 'Punti: ' + state.score + ' · Livello: ' + state.level + ' · Record: ' + hi, 'Gioca ancora', function () { startLevel(1, 0); });
+        AR.overlay(wrap, 'PARTITA FINITA', 'Le bolle hanno passato la linea rossa. Punti: ' + state.score + '. Record: ' + hi + '.', 'GIOCA ANCORA', function () { startLevel(1, 0); });
       }
     }
 
@@ -407,8 +468,9 @@
     const unbind = AR.bindKeys(function (k, down) {
       if (down && (k === ' ' || k === 'arrowup' || k === 'w')) shoot();
     });
-    loop = AR.startLoop(frame, draw);
-    AR.overlay(wrap, 'Bolle Procioni 🦝', 'Mira con il mouse e fai clic per tirare. Oppure usa le frecce ← → e la barra spaziatrice. Unisci 3 bolle uguali per farle scoppiare.', 'Inizia', function () { startLevel(1, 0); });
+    const loop = AR.startLoop(frame, draw);
+    AR.help(wrap, 'Mira con il mouse e fai clic per tirare. Oppure: frecce sinistra e destra per mirare, Spazio per tirare.');
+    AR.overlay(wrap, 'BOLLE', 'Unisci tre bolle dello stesso colore per farle scoppiare. Non farle scendere sotto la linea rossa.', 'INIZIA', function () { startLevel(1, 0); });
     return {
       destroy: function () {
         loop.stop();
@@ -422,8 +484,9 @@
   }
 
   return {
-    meta: { id: 'bubbles', title: 'Bolle Procioni', icon: '🔮', desc: 'Tira le bolle. Tre bolle uguali scoppiano.' },
+    meta: { id: 'bubbles', title: 'Bolle', desc: 'Tre bolle dello stesso colore scoppiano.' },
     mount: mount,
+    thumb: thumb,
     newGame: newGame,
     update: update,
     fire: fire,

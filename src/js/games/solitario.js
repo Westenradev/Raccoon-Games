@@ -192,7 +192,7 @@
     let won = false;
     let alive = true;
     const timers = [];
-    const root = U.el('div', { class: 'solitario game-panel' });
+    const root = U.el('div', { class: 'solitario game-panel tabletop' });
     container.appendChild(root);
 
     function snapshot() {
@@ -206,6 +206,7 @@
       sel = null;
       hint = null;
       won = false;
+      celebrated = false;
       note = '';
       render();
     }
@@ -258,7 +259,7 @@
       }
       if (dests.length === 1) return doMove(src, dests[0]);
       sel = { src: src, dests: dests };
-      note = 'Scegli dove mettere la carta: tocca una delle destinazioni illuminate.';
+      note = 'Questa carta può andare in più posti. Tocca il posto che preferisci.';
       if (A) A.sfx.click();
       render();
     }
@@ -308,6 +309,13 @@
       return !!sel && sel.dests.some(function (d) { return d.type === dst.type && d.col === dst.col && d.suit === dst.suit; });
     }
 
+    // Small tag with the value of the card. Piacentine cards have no numbers in the corner,
+    // so the tag helps when cards overlap. Red tag: Coppe and Denari. Blue tag: Spade and Bastoni.
+    function tagged(node, card) {
+      node.appendChild(U.el('span', { class: 'rank-tag g' + (card.suit < 2 ? 0 : 1), text: String(card.rank) }));
+      return node;
+    }
+
     function render() {
       if (!alive) return;
       root.innerHTML = '';
@@ -321,7 +329,7 @@
 
       const wasteTop = state.waste.length ? state.waste[state.waste.length - 1].card : null;
       const waste = wasteTop
-        ? D.cardEl(wasteTop, { selected: !!sel && sel.src.type === 'waste', onclick: function () { clickSource({ type: 'waste' }); } })
+        ? tagged(D.cardEl(wasteTop, { selected: !!sel && sel.src.type === 'waste', onclick: function () { clickSource({ type: 'waste' }); } }), wasteTop)
         : U.el('div', { class: 'pcard empty' });
       if (hint && hint.src && hint.src.type === 'waste') waste.classList.add('hinted');
       waste.setAttribute('data-role', 'waste');
@@ -337,10 +345,11 @@
         };
         let node;
         if (topCard) {
-          node = D.cardEl(topCard, { selected: !!sel && sel.src.type === 'found' && sel.src.suit === suit, onclick: onclick });
+          node = tagged(D.cardEl(topCard, { selected: !!sel && sel.src.type === 'found' && sel.src.suit === suit, onclick: onclick }), topCard);
         } else {
-          node = U.el('div', { class: 'pcard empty found', onclick: onclick });
-          node.innerHTML = D.suitSvg(suit, 'found-suit');
+          // An empty pile shows a faint Asso of its suit.
+          node = U.el('div', { class: 'pcard empty found', onclick: onclick, title: 'Qui va l\'Asso di ' + D.SUITS[suit].name },
+            U.el('img', { src: D.imageOf({ suit: suit, rank: 1 }), alt: '', draggable: 'false' }));
         }
         if (isDest(dst)) node.classList.add('dest');
         node.setAttribute('data-role', 'found-' + suit);
@@ -348,56 +357,128 @@
       });
       root.appendChild(top);
 
+      // Cards overlap less when a column is long, so the table never needs to scroll.
+      const cw = parseFloat(getComputedStyle(root).getPropertyValue('--cw')) || 86;
+      const cardH = cw * 716 / 384;
+      const room = Math.max(cardH + 60, window.innerHeight - 56 - 150 - cardH - 150);
       const board = U.el('div', { class: 'sol-row tableau' });
       let tallest = 0;
       state.tableau.forEach(function (col, ci) {
         const dst = { type: 'tab', col: ci };
         const colEl = U.el('div', { class: 'col' + (isDest(dst) ? ' dest' : ''), 'data-col': ci, onclick: function () { clickDest(dst); } });
         if (!col.length) colEl.appendChild(U.el('div', { class: 'pcard empty' }));
+        const downs = col.filter(function (c) { return !c.up; }).length;
+        const ups = col.length - downs;
+        const downStep = cw * 0.13;
+        const upStep = ups > 1 ? Math.min(cw * 0.4, (room - cardH - downs * downStep) / (ups - 1)) : 0;
         let y = 0;
         col.forEach(function (slot, idx) {
           const src = { type: 'tab', col: ci, idx: idx };
           const selected = !!sel && sel.src.type === 'tab' && sel.src.col === ci && idx >= sel.src.idx;
           const node = slot.up
-            ? D.cardEl(slot.card, {
+            ? tagged(D.cardEl(slot.card, {
               selected: selected,
               onclick: function (e) {
                 e.stopPropagation();
                 if (clickDest(dst)) return;
                 clickSource(src);
               },
-            })
+            }), slot.card)
             : D.cardEl(null, { hidden: true });
           node.classList.add('stacked');
           node.style.top = y + 'px';
           if (hint && hint.src && hint.src.type === 'tab' && hint.src.col === ci && hint.src.idx === idx) node.classList.add('hinted');
           colEl.appendChild(node);
-          y += slot.up ? 30 : 12;
+          if (idx < col.length - 1) y += slot.up ? upStep : downStep;
         });
         tallest = Math.max(tallest, y);
         board.appendChild(colEl);
       });
-      board.style.height = (tallest + 110) + 'px';
+      board.style.height = (tallest + cardH + 6) + 'px';
       root.appendChild(board);
 
       const done = state.foundation.reduce(function (s, p) { return s + p.length; }, 0);
-      root.appendChild(U.el('div', { class: 'msg', text: note || 'Tocca una carta per spostarla. Tocca il mazzo per pescare.' }));
+      root.appendChild(U.el('div', { class: 'msg', text: note || 'Tocca una carta per spostarla. Tocca il mazzo per girare una carta.' }));
       const actions = U.el('div', { class: 'actions' },
-        U.el('button', { class: 'btn', text: 'Suggerimento 💡', onclick: showHint }),
-        U.el('button', { class: 'btn', text: 'Annulla ↩', onclick: undo }),
+        U.el('button', { class: 'btn', text: 'Suggerimento', onclick: showHint }),
+        U.el('button', { class: 'btn', text: 'Annulla mossa', onclick: undo }),
         U.el('button', { class: 'btn ghost', text: 'Nuova partita', onclick: newGameNow }));
       if (!won && canAutoFinish(state)) {
-        actions.insertBefore(U.el('button', { class: 'btn', text: 'Completa da solo ✨', onclick: autoFinish }), actions.firstChild);
+        actions.insertBefore(U.el('button', { class: 'btn pulse', text: 'Completa da solo', onclick: autoFinish }), actions.firstChild);
       }
       root.appendChild(actions);
-      root.appendChild(U.el('div', { class: 'hint', text: 'Mosse: ' + state.moves + ' · Carte nelle pile finali: ' + done + ' su 40' }));
+      root.appendChild(U.el('div', { class: 'hint', text: 'Mosse: ' + state.moves + '. Carte nelle pile finali: ' + done + ' su 40. In colonna si scende di uno, alternando etichetta rossa e blu.' }));
 
-      if (won) {
-        root.appendChild(U.el('div', { class: 'overlay' }, U.el('div', { class: 'card-box' },
-          U.el('h2', { text: 'Hai vinto! 🦝🎉' }),
-          U.el('p', { text: 'Tutte le carte sono nelle pile finali. Mosse: ' + state.moves + '.' }),
-          U.el('button', { class: 'btn big', text: 'Nuova partita', onclick: newGameNow }))));
+      if (won) showWin();
+    }
+
+    function winCard() {
+      root.appendChild(U.el('div', { class: 'overlay' }, U.el('div', { class: 'card-box' },
+        U.el('h2', { text: 'Solitario riuscito!' }),
+        U.el('p', { text: 'Tutte le 40 carte sono nelle pile finali. Mosse: ' + state.moves + '.' }),
+        U.el('button', { class: 'btn big', text: 'Nuova partita', onclick: newGameNow }))));
+    }
+
+    // Win: the cards jump out of the final piles and bounce across the table,
+    // leaving a trail, like the classic computer solitaire.
+    let celebrated = false;
+    function showWin() {
+      if (celebrated || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return winCard();
+      celebrated = true;
+      const rootBox = root.getBoundingClientRect();
+      const canvas = U.el('canvas', { class: 'cascade' });
+      canvas.width = rootBox.width;
+      canvas.height = rootBox.height;
+      root.appendChild(canvas);
+      const g = canvas.getContext('2d');
+      const cw = parseFloat(getComputedStyle(root).getPropertyValue('--cw')) || 86;
+      const ch = cw * 716 / 384;
+      const queue = [];
+      for (let rank = 10; rank >= 1; rank--) {
+        for (let suit = 0; suit < 4; suit++) {
+          const el = root.querySelector('[data-role="found-' + suit + '"]');
+          const box = el.getBoundingClientRect();
+          const img = new Image();
+          img.src = D.imageOf({ suit: suit, rank: rank });
+          queue.push({ img: img, x: box.left - rootBox.left, y: box.top - rootBox.top });
+        }
       }
+      const flying = [];
+      let frame = 0;
+      const startedAt = Date.now();
+      const tick = function () {
+        if (!alive || !canvas.isConnected) return;
+        frame += 1;
+        if (frame % 9 === 1 && queue.length) {
+          const c = queue.shift();
+          c.vx = (Math.random() < 0.5 ? -1 : 1) * (2 + Math.random() * 4);
+          c.vy = -Math.random() * 6;
+          flying.push(c);
+        }
+        for (let i = flying.length - 1; i >= 0; i--) {
+          const c = flying[i];
+          c.vy += 0.55;
+          c.x += c.vx;
+          c.y += c.vy;
+          if (c.y + ch > canvas.height) {
+            c.y = canvas.height - ch;
+            c.vy = -c.vy * 0.82;
+          }
+          if (c.img.complete) g.drawImage(c.img, c.x, c.y, cw, ch);
+          if (c.x < -cw || c.x > canvas.width) flying.splice(i, 1);
+        }
+        if ((!queue.length && !flying.length) || Date.now() - startedAt > 12000) {
+          canvas.remove();
+          return winCard();
+        }
+        requestAnimationFrame(tick);
+      };
+      canvas.style.pointerEvents = 'auto';
+      canvas.addEventListener('click', function () {
+        canvas.remove();
+        winCard();
+      });
+      requestAnimationFrame(tick);
     }
 
     render();
@@ -408,7 +489,7 @@
       },
       debug: {
         get state() { return state; },
-        set state(s) { state = s; history = []; sel = null; won = isWon(s); render(); },
+        set state(s) { state = s; history = []; sel = null; won = isWon(s); celebrated = false; render(); },
         get won() { return won; },
         findHint: function () { return findHint(state); },
       },
@@ -416,7 +497,7 @@
   }
 
   return {
-    meta: { id: 'solitario', title: 'Solitario', icon: '🎴', desc: 'Il solitario classico con le carte Piacentine dei procioni.' },
+    meta: { id: 'solitario', title: 'Solitario', desc: 'Il solitario classico, con le carte piacentine.' },
     mount: mount,
     newGame: newGame,
     move: move,

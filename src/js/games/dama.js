@@ -1,4 +1,5 @@
-// Dama italiana with the Damone. You (white, bottom) play against the Chihuahua (black, top).
+// Dama italiana with the Damone. You (white, bottom) play against the computer (black, top).
+// The board has its dark corner square at the bottom right, as in Italian dama.
 // Rules:
 // - A pedina moves one step forward on the diagonal. It captures forward only.
 // - A pedina can never capture a Damone. Only a Damone can capture a Damone.
@@ -19,9 +20,9 @@
   const WHITE = 'w'; // human, moves up (row index goes down)
   const BLACK = 'b'; // CPU, moves down
   const LEVELS = {
-    facile: { label: 'Facile 🐭', depth: 2, blunder: 0.35 },
-    medio: { label: 'Medio 🐱', depth: 4, blunder: 0 },
-    difficile: { label: 'Difficile 🦝', depth: 8, blunder: 0 },
+    facile: { label: 'Facile', depth: 2, blunder: 0.35 },
+    medio: { label: 'Medio', depth: 4, blunder: 0 },
+    difficile: { label: 'Difficile', depth: 8, blunder: 0 },
   };
   const DRAW_PLIES = 80; // 40 moves each without a capture or a pedina move
 
@@ -30,12 +31,14 @@
   const colOf = function (i) { return i & 7; };
   const other = function (color) { return color === WHITE ? BLACK : WHITE; };
 
-  // Pieces are { c: 'w' | 'b', d: true when Damone }. Only dark squares are used.
+  // Pieces are { c: 'w' | 'b', d: true when Damone }. Only dark squares are used:
+  // a square is dark when row + column is even, so the bottom right corner is dark.
+  const isDark = function (sq) { return (rowOf(sq) + colOf(sq)) % 2 === 0; };
   function initialBoard() {
     const b = new Array(64).fill(null);
     for (let r = 0; r < 8; r++) {
       for (let c = 0; c < 8; c++) {
-        if ((r + c) % 2 === 0) continue;
+        if ((r + c) % 2 === 1) continue;
         if (r < 3) b[r * 8 + c] = { c: BLACK, d: false };
         else if (r > 4) b[r * 8 + c] = { c: WHITE, d: false };
       }
@@ -206,7 +209,7 @@
     let lastMove = null;
     let note = '';
     const wins = U.store.get('dama.score', { human: 0, cpu: 0 });
-    const root = U.el('div', { class: 'dama game-panel' });
+    const root = U.el('div', { class: 'dama game-panel tabletop' });
     container.appendChild(root);
 
     function reset() {
@@ -251,7 +254,7 @@
         const mv = cpuMove(board, BLACK, level, rnd);
         thinking = false;
         if (mv) playMove(mv);
-        note = mv && mv.caps.length ? 'Il Chihuahua ha mangiato ' + mv.caps.length + (mv.caps.length === 1 ? ' pezzo.' : ' pezzi.') : '';
+        note = mv && mv.caps.length ? 'L\'avversario ha mangiato ' + mv.caps.length + (mv.caps.length === 1 ? ' pezzo.' : ' pezzi.') : '';
         render();
       }, 500));
     }
@@ -277,7 +280,7 @@
           if (A) A.sfx.click();
         } else {
           selected = null;
-          note = moves[0].caps.length ? 'Devi mangiare: muovi un pezzo con il bordo verde.' : 'Questo pezzo non può muoversi.';
+          note = moves[0].caps.length ? 'Devi mangiare: muovi un pezzo con il cerchio bianco.' : 'Questo pezzo non può muoversi.';
           if (A) A.sfx.bad();
         }
       } else {
@@ -296,13 +299,13 @@
       const mustCapture = moves.length > 0 && moves[0].caps.length > 0;
 
       root.appendChild(U.el('div', { class: 'pill-row' },
-        U.el('div', { class: 'pill', text: '🐭 Tu: ' + countPieces(board, WHITE) + ' pezzi' }),
-        U.el('div', { class: 'pill', text: '🐕 Chihuahua: ' + countPieces(board, BLACK) + ' pezzi' }),
-        U.el('div', { class: 'pill', text: 'Vittorie: ' + wins.human + ' - ' + wins.cpu })));
+        U.el('div', { class: 'pill', text: 'Tu (bianco): ' + countPieces(board, WHITE) + ' pezzi' }),
+        U.el('div', { class: 'pill', text: 'Avversario (nero): ' + countPieces(board, BLACK) + ' pezzi' }),
+        U.el('div', { class: 'pill', text: 'Partite vinte: ' + wins.human + ' a ' + wins.cpu })));
 
       const boardEl = U.el('div', { class: 'checker-board' });
       for (let sq = 0; sq < 64; sq++) {
-        const dark = (rowOf(sq) + colOf(sq)) % 2 === 1;
+        const dark = isDark(sq);
         const cls = ['sq', dark ? 'dark' : 'light'];
         if (selected === sq) cls.push('sel');
         if (targets.has(sq)) cls.push('target');
@@ -313,22 +316,19 @@
           const pc = ['piece', p.c === WHITE ? 'white' : 'black'];
           if (p.d) pc.push('damone');
           if (movable.has(sq)) pc.push(mustCapture ? 'must' : 'movable');
-          const icon = p.c === WHITE ? (p.d ? '🦝' : '🐭') : (p.d ? '🐱' : '🐕');
-          const piece = U.el('div', { class: pc.join(' ') }, U.el('span', { text: icon }));
-          if (p.d) piece.appendChild(U.el('span', { class: 'crown', text: '👑' }));
-          cell.appendChild(piece);
+          cell.appendChild(U.el('div', { class: pc.join(' ') }));
         }
         boardEl.appendChild(cell);
       }
       root.appendChild(boardEl);
 
       let msg = note;
-      if (over) msg = over === 'human' ? 'Hai vinto! 🦝🏆' : over === 'cpu' ? 'Ha vinto il Chihuahua 🐕' : 'Patta: 40 mosse senza catture.';
-      else if (thinking) msg = 'Il Chihuahua sta pensando…';
-      else if (!msg) msg = mustCapture ? 'Devi mangiare. Tocca un pezzo con il bordo verde.' : (selected === null ? 'Tocca un tuo pezzo, poi la casella di arrivo.' : 'Ora tocca una casella con il pallino verde.');
+      if (over) msg = over === 'human' ? 'Hai vinto!' : over === 'cpu' ? 'Ha vinto l\'avversario' : 'Patta: 40 mosse senza prese.';
+      else if (thinking) msg = 'L\'avversario sta pensando…';
+      else if (!msg) msg = mustCapture ? 'Devi mangiare. Tocca un pezzo con il cerchio bianco.' : (selected === null ? 'Tocca un tuo pezzo, poi la casella di arrivo.' : 'Ora tocca una casella con il pallino bianco.');
       root.appendChild(U.el('div', { class: 'msg' + (over ? ' big' : ''), text: msg }));
 
-      const levels = U.el('div', { class: 'levels' }, U.el('span', { class: 'hint', text: 'Livello:' }));
+      const levels = U.el('div', { class: 'levels' }, U.el('span', { class: 'hint', text: 'Livello' }));
       Object.keys(LEVELS).forEach(function (k) {
         levels.appendChild(U.el('button', {
           class: 'btn ' + (k === level ? '' : 'ghost'),
@@ -343,7 +343,9 @@
       });
       levels.appendChild(U.el('button', { class: 'btn ghost', text: 'Nuova partita', onclick: reset }));
       root.appendChild(levels);
-      root.appendChild(U.el('div', { class: 'hint', text: '🐭 pedina → 🦝 Damone (tuo) · 🐕 pedina → 🐱 Damone (Chihuahua). Il Damone si mangia solo con un altro Damone. Le pedine mangiano solo in avanti.' }));
+      root.appendChild(U.el('div', { class: 'legend' },
+        U.el('span', null, U.el('i', { class: 'piece white' }), 'Pedina: muove e mangia in avanti'),
+        U.el('span', null, U.el('i', { class: 'piece white damone' }), 'Damone: muove in ogni direzione. Solo un Damone lo può mangiare')));
     }
 
     render();
@@ -364,10 +366,11 @@
   }
 
   return {
-    meta: { id: 'dama', title: 'Dama', icon: '👑', desc: 'Dama italiana con il Damone: solo un Damone può mangiare un Damone.' },
+    meta: { id: 'dama', title: 'Dama', desc: 'Dama italiana. Solo un Damone può mangiare un Damone.' },
     mount: mount,
     LEVELS: LEVELS,
     initialBoard: initialBoard,
+    isDark: isDark,
     legalMoves: legalMoves,
     applyMove: applyMove,
     cpuMove: cpuMove,

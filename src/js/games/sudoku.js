@@ -9,9 +9,9 @@
   const A = isNode ? null : window.RA.audio;
 
   const LEVELS = {
-    facile: { label: 'Facile 🐭', givens: 42 },
-    medio: { label: 'Medio 🐱', givens: 33 },
-    difficile: { label: 'Difficile 🦝', givens: 26 },
+    facile: { label: 'Facile', givens: 42 },
+    medio: { label: 'Medio', givens: 33 },
+    difficile: { label: 'Difficile', givens: 26 },
   };
 
   // Board is a flat array of 81 numbers, 0 = empty.
@@ -128,7 +128,7 @@
     let mistakes = 0;
     let hints = 0;
     let won = false;
-    const root = U.el('div', { class: 'sudoku game-panel' });
+    const root = U.el('div', { class: 'sudoku game-panel sheet' });
     container.appendChild(root);
 
     function elapsed() {
@@ -226,33 +226,17 @@
           },
         }));
       }
-      root.appendChild(U.el('div', { class: 'pill-row' },
-        U.el('div', { class: 'pill' }, '⏱ ', U.el('span', { class: 'clock', text: elapsed() })),
-        U.el('div', { class: 'pill', text: 'Errori: ' + mistakes }),
-        U.el('div', { class: 'pill', text: 'Aiuti: ' + hints })));
-      root.appendChild(grid);
-
-      const counts = new Array(10).fill(0);
-      board.forEach(function (v) { counts[v] += 1; });
-      const pad = U.el('div', { class: 'pad' });
-      for (let v = 1; v <= 9; v++) {
-        pad.appendChild(U.el('button', {
-          class: 'btn num' + (counts[v] >= 9 ? ' done' : ''),
-          text: String(v),
-          title: 'Mancano ' + Math.max(0, 9 - counts[v]),
-          onclick: function () { setValue(v); },
-        }));
-      }
-      pad.appendChild(U.el('button', { class: 'btn num erase', text: '⌫', title: 'Cancella', onclick: function () { setValue(0); } }));
-      root.appendChild(pad);
-
-      root.appendChild(U.el('div', { class: 'msg', text: won
-        ? 'Bravo! Sudoku completato in ' + elapsed() + ' 🦝🎉'
-        : 'Tocca una casella, poi un numero. Puoi usare anche la tastiera.' }));
+      root.appendChild(U.el('div', { class: 'sheet-head' },
+        U.el('h2', { text: 'Sudoku' }),
+        U.el('div', { class: 'sheet-meta' },
+          U.el('span', null, 'Tempo ', U.el('b', { class: 'clock', text: elapsed() })),
+          U.el('span', null, 'Errori ', U.el('b', { text: String(mistakes) })),
+          U.el('span', null, 'Aiuti ', U.el('b', { text: String(hints) })))));
       const levelButtons = U.el('div', { class: 'levels' });
       Object.keys(LEVELS).forEach(function (k) {
         levelButtons.appendChild(U.el('button', {
           class: 'btn ' + (k === level ? '' : 'ghost'),
+          'data-level': k,
           text: LEVELS[k].label,
           onclick: function () {
             level = k;
@@ -262,10 +246,29 @@
         }));
       });
       root.appendChild(levelButtons);
+      root.appendChild(grid);
+
+      const counts = new Array(10).fill(0);
+      board.forEach(function (v) { counts[v] += 1; });
+      const pad = U.el('div', { class: 'pad' });
+      for (let v = 1; v <= 9; v++) {
+        const left = Math.max(0, 9 - counts[v]);
+        pad.appendChild(U.el('button', {
+          class: 'btn num' + (left === 0 ? ' done' : ''),
+          title: 'Ne mancano ' + left,
+          onclick: function () { setValue(v); },
+        }, String(v), U.el('small', { text: String(left) })));
+      }
+      pad.appendChild(U.el('button', { class: 'btn num erase', text: 'Canc', title: 'Cancella la casella', onclick: function () { setValue(0); } }));
+      root.appendChild(pad);
+
+      root.appendChild(U.el('div', { class: 'msg', text: won
+        ? 'Bravo! Sudoku completato in ' + elapsed() + '.'
+        : 'Tocca una casella, poi un numero.' }));
       root.appendChild(U.el('div', { class: 'actions' },
-        U.el('button', { class: 'btn', text: showErrors ? 'Nascondi errori' : 'Mostra errori', onclick: function () { showErrors = !showErrors; render(); } }),
-        U.el('button', { class: 'btn', text: 'Aiuto 💡', onclick: hint }),
-        U.el('button', { class: 'btn ghost', text: 'Nuovo sudoku', onclick: newGame })));
+        U.el('button', { class: 'btn ghost', text: showErrors ? 'Nascondi gli errori' : 'Mostra gli errori', onclick: function () { showErrors = !showErrors; render(); } }),
+        U.el('button', { class: 'btn ghost', text: 'Dammi un aiuto', onclick: hint }),
+        U.el('button', { class: 'btn primary', text: 'Nuovo sudoku', onclick: newGame })));
     }
 
     function onKey(e) {
@@ -307,7 +310,7 @@
   }
 
   return {
-    meta: { id: 'sudoku', title: 'Sudoku', icon: '🔢', desc: 'Sudoku con 3 livelli. Ogni schema ha una sola soluzione.' },
+    meta: { id: 'sudoku', title: 'Sudoku', desc: 'Tre livelli. Ogni schema ha una sola soluzione.' },
     mount: mount,
     LEVELS: LEVELS,
     generatePuzzle: generatePuzzle,
